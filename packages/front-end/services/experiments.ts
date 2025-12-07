@@ -15,6 +15,7 @@ import {
   ExperimentTemplateInterface,
   MetricOverride,
 } from "back-end/types/experiment";
+import { DataSourceInterfaceWithParams } from "back-end/types/datasource";
 import cloneDeep from "lodash/cloneDeep";
 import { getValidDate } from "shared/dates";
 import { isNil, omit } from "lodash";
@@ -35,6 +36,7 @@ import {
   DEFAULT_LOSE_RISK_THRESHOLD,
   DEFAULT_WIN_RISK_THRESHOLD,
 } from "shared/constants";
+import { ReactElement } from "react";
 import { useOrganizationMetricDefaults } from "@/hooks/useOrganizationMetricDefaults";
 import { getExperimentMetricFormatter } from "@/services/metrics";
 import { getDefaultVariations } from "@/components/Experiment/NewExperimentForm";
@@ -158,7 +160,7 @@ export function experimentDate(exp: ExperimentInterfaceStringDates): string {
 }
 
 export type ExperimentTableRow = {
-  label: string;
+  label: string | ReactElement;
   metric: ExperimentMetricInterface;
   metricOverrideFields: string[];
   variations: SnapshotMetric[];
@@ -170,8 +172,10 @@ export type ExperimentTableRow = {
   // Slice row properties
   isSliceRow?: boolean;
   parentRowId?: string;
+  sliceId?: string;
   sliceLevels?: Array<{
     column: string;
+    datatype: "string" | "boolean";
     levels: string[];
   }>;
   allSliceLevels?: string[];
@@ -422,6 +426,7 @@ export function useExperimentSearch({
     getProjectById,
     getDatasourceById,
     getSavedGroupById,
+    metricGroups,
   } = useDefinitions();
   const { getUserDisplay } = useUser();
   const getExperimentStatusIndicator = useExperimentStatusIndicator();
@@ -536,7 +541,7 @@ export function useExperimentSearch({
       datasource: (item) => item.datasource,
       metric: (item) => [
         ...(item.metricNames ?? []),
-        ...getAllMetricIdsFromExperiment(item),
+        ...getAllMetricIdsFromExperiment(item, true, metricGroups),
       ],
       savedgroup: (item) => item.savedGroups || [],
       goal: (item) => [...(item.metricNames ?? []), ...item.goalMetrics],
@@ -975,4 +980,32 @@ export function convertExperimentToTemplate(
     },
   };
   return template;
+}
+
+export function getIsExperimentIncludedInIncrementalRefresh(
+  datasource: DataSourceInterfaceWithParams | undefined,
+  experimentId: string | undefined,
+): boolean {
+  const isPipelineIncrementalEnabled =
+    datasource?.settings.pipelineSettings?.mode === "incremental";
+  if (!isPipelineIncrementalEnabled) {
+    return false;
+  }
+
+  const includedExperimentIds =
+    datasource?.settings.pipelineSettings?.includedExperimentIds;
+  const excludedExperimentIds =
+    datasource?.settings.pipelineSettings?.excludedExperimentIds;
+
+  if (experimentId && excludedExperimentIds?.includes(experimentId)) {
+    return false;
+  }
+
+  // If no specific experiment IDs are set, all experiments are included
+  // If experimentId is not provided, consider it included for the New Experiment form
+  if (includedExperimentIds === undefined || !experimentId) {
+    return true;
+  }
+
+  return includedExperimentIds.includes(experimentId);
 }

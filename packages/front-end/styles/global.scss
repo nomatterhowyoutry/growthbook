@@ -216,7 +216,7 @@ pre {
   background-color: rgba(124, 69, 234, 0.1);
   border: 2px solid #7c45ea;
 }
-.dark .btn-outline-primary {
+.dark-theme .btn-outline-primary {
   @include button-outline-variant(
     colors.$highlight-purple-light,
     #fff,
@@ -270,12 +270,6 @@ pre {
   color: #8fb3a8;
   margin-left: 8px;
   cursor: not-allowed !important;
-  .toggle-switch.teal + label {
-    background: #cfe6de;
-  }
-  .toggle-switch.teal input:checked + label {
-    background: #cfe6de;
-  }
 }
 .btn-outline-selected:not(:disabled):not(.disabled) {
   background-color: rgba(69, 196, 234, 0.1);
@@ -949,8 +943,8 @@ main.main {
     }
   }
 }
-.dark .bg-white textarea.form-control,
-.dark .tab-content input.form-control {
+.dark-theme .bg-white textarea.form-control,
+.dark-theme .tab-content input.form-control {
   background-color: var(--black-a3);
 }
 
@@ -991,7 +985,7 @@ main.main {
 
 .link-purple {
   color: var(--violet-a11);
-  text-decoration: none;
+  text-decoration: var(--violet-a5);
   &:hover {
     color: var(--violet-a10);
     text-decoration: underline;
@@ -1045,7 +1039,7 @@ main.main {
     vertical-align: middle;
   }
 
-  .dark &.decision-criteria-table {
+  .dark-theme &.decision-criteria-table {
     tbody {
       tr {
         background-color: #1b2339;
@@ -1059,7 +1053,7 @@ main.main {
     }
   }
 }
-.dark .gbtable {
+.dark-theme .gbtable {
   thead {
     th {
       background-color: #262d42;
@@ -1078,7 +1072,7 @@ main.main {
   }
 }
 
-.dark .query-table {
+.dark-theme .query-table {
   thead {
     th {
       // hard coded to match slate-a2 on the background color
@@ -1248,7 +1242,7 @@ main.main {
     border-color: var(--border-color-300);
   }
 }
-.dark .buttontabs {
+.dark-theme .buttontabs {
   .nav-button-item {
     &.active {
       color: colors.$highlight-purple-light;
@@ -1263,7 +1257,7 @@ main.main {
   background-color: rgba(255, 255, 255, 1);
   padding: 7px 9px;
 }
-.dark .dropdown-circle {
+.dark-theme .dropdown-circle {
   background-color: rgba(255, 255, 255, 0.1);
 }
 .shiftdown-1 {
@@ -1395,8 +1389,8 @@ main.main {
     }
   }
 }
-.dark .appbox:not(.nobg) .appbox,
-.dark .box:not(.nobg) .appbox {
+.dark-theme .appbox:not(.nobg) .appbox,
+.dark-theme .box:not(.nobg) .appbox {
   background-color: var(--white-a1);
 }
 
@@ -1706,82 +1700,6 @@ main.main {
     box-shadow: rgba(6, 6, 6, 0.365) 0px 0px 1px;
     clip-path: polygon(0% 0%, 104% -4%, 100% 100%);
     border: 1px inset var(--border-color-300);
-  }
-}
-
-.toggle-switch {
-  display: inline-block;
-  margin-right: 5px;
-  vertical-align: middle;
-  height: 25px;
-  width: 50px;
-  position: relative;
-
-  input[type="checkbox"] {
-    height: 0;
-    width: 0;
-    visibility: hidden;
-  }
-
-  label {
-    position: absolute;
-    top: 0;
-    left: 0;
-    cursor: pointer;
-    text-indent: -9999px;
-    width: 50px;
-    height: 25px;
-    background: var(--form-switch-background);
-    display: block;
-    border-radius: 100px;
-    margin-bottom: 0;
-    padding-bottom: 0;
-  }
-
-  label:after {
-    content: "";
-    position: absolute;
-    top: 2px;
-    left: 2px;
-    width: 21px;
-    height: 21px;
-    background: var(--surface-background-color);
-    border-radius: 90px;
-    transition: 0.3s;
-  }
-
-  input:checked + label:after {
-    left: calc(100% - 2px);
-    transform: translateX(-100%);
-  }
-
-  input:checked + label {
-    background: var(--form-switch-background-active);
-  }
-  &.toggle-featureValue input:checked + label {
-    background: colors.$blue;
-  }
-
-  label:active:after {
-    width: 30px;
-  }
-
-  &.disabled {
-    label {
-      cursor: not-allowed;
-    }
-    label:active:after {
-      width: 21px;
-    }
-  }
-
-  &.teal {
-    label {
-      background: #cfe6de;
-    }
-    input:checked + label {
-      background: colors.$teal;
-    }
   }
 }
 

@@ -1,4 +1,4 @@
-import { ExperimentMetricInterface } from "shared/experiments";
+import { ExperimentMetricInterface, SliceLevelsData } from "shared/experiments";
 import { OrganizationSettings } from "back-end/types/organization";
 import { MetricGroupInterface } from "back-end/types/metric-groups";
 import { DimensionInterface } from "back-end/types/dimension";
@@ -76,7 +76,7 @@ export type ExperimentReportPhase = Pick<
 /** @deprecated */
 export interface ExperimentReportInterface extends ReportInterfaceBase {
   type: "experiment";
-  args: ExperimentReportArgs;
+  args: LegacyExperimentReportArgs;
   results?: ExperimentReportResults;
   error?: string;
   queries: Queries;
@@ -110,7 +110,8 @@ export type LegacyMetricRegressionAdjustmentStatus = {
   reason: string;
 };
 
-export interface ExperimentReportArgs {
+/** @deprecated */
+export interface LegacyExperimentReportArgs {
   trackingKey: string;
   datasource: string;
   /** @deprecated */
@@ -159,7 +160,7 @@ export type ReportInterface =
 /** @deprecated */
 export type LegacyReportInterface = Omit<ExperimentReportInterface, "args"> & {
   args: Omit<
-    ExperimentReportArgs,
+    LegacyExperimentReportArgs,
     | "goalMetrics"
     | "guardrailMetrics"
     | "secondaryMetrics"
@@ -186,11 +187,7 @@ export type ExperimentReportSSRData = {
       name: string;
       description: string;
       baseMetricId: string;
-      sliceLevels: Array<{
-        column: string;
-        columnName: string;
-        level: string | null;
-      }>;
+      sliceLevels: SliceLevelsData[];
       allSliceLevels: string[];
     }>
   >;

@@ -1,12 +1,11 @@
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 import dataclasses
 import re
 import traceback
 import copy
-from typing import Any, Dict, Hashable, List, Optional, Set, Tuple, Union
+from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 import pandas as pd
-import numpy as np
 
 from gbstats.bayesian.tests import (
     BayesianTestResult,
@@ -28,11 +27,10 @@ from gbstats.power.midexperimentpower import (
     MidExperimentPowerConfig,
 )
 
-from gbstats.models.tests import BaseConfig
+from gbstats.models.tests import BaseConfig, sum_stats
 
 from gbstats.frequentist.tests import (
     FrequentistConfig,
-    FrequentistTestResult,
     SequentialConfig,
     SequentialTwoSidedTTest,
     TwoSidedTTest,
@@ -40,14 +38,11 @@ from gbstats.frequentist.tests import (
     OneSidedTreatmentLesserTTest,
     SequentialOneSidedTreatmentLesserTTest,
     SequentialOneSidedTreatmentGreaterTTest,
+    FrequentistTestResult,
 )
 
 from gbstats.models.results import (
     DimensionResponse,
-    BaselineResponseForComparison,
-    BayesianVariationResponseForComparison,
-    FrequentistVariationResponseForComparison,
-    VariationResponse,
     ExperimentMetricAnalysis,
     ExperimentMetricAnalysisResult,
     MetricStats,
@@ -56,9 +51,12 @@ from gbstats.models.results import (
     BayesianVariationResponse,
     FrequentistVariationResponse,
     BanditResult,
-    ResponseCI,
     SingleVariationResult,
     PowerResponse,
+    create_test_result_no_defaults_bayesian,
+    create_test_result_no_defaults_frequentist,
+    BayesianTestResultNoDefaults,
+    FrequentistTestResultNoDefaults,
 )
 from gbstats.models.settings import (
     AnalysisSettingsForStatsEngine,
@@ -83,6 +81,8 @@ from gbstats.models.statistics import (
     BanditStatistic,
 )
 from gbstats.utils import check_srm
+
+from gbstats.models.tests import EffectMomentsResult
 
 
 SUM_COLS = [
@@ -134,6 +134,16 @@ BANDIT_DIMENSION = {
     "value": "All",
 }
 
+StatisticalTests = Union[
+    EffectBayesianABTest,
+    SequentialTwoSidedTTest,
+    TwoSidedTTest,
+    OneSidedTreatmentGreaterTTest,
+    OneSidedTreatmentLesserTTest,
+    SequentialOneSidedTreatmentLesserTTest,
+    SequentialOneSidedTreatmentGreaterTTest,
+]
+
 
 # Looks for any variation ids that are not in the provided map
 def detect_unknown_variations(
@@ -163,150 +173,162 @@ def get_dimension_column_name(dimension: str) -> str:
     return dimension_column_name
 
 
-# Transform raw SQL result for metrics into a dataframe of dimensions
-def get_metric_df(
+@dataclass
+class InitialMetricDataStrata:
+    total_units: int
+    data: Dict[str, Dict[str, Any]]
+
+
+@dataclass
+class DimensionMetricData:
+    dimension: str
+    total_units: int
+    data: pd.DataFrame
+
+
+# Transform raw SQL result for metrics into a dataframe per dimension level
+def get_metric_dfs(
     rows: pd.DataFrame,
     var_id_map: VarIdMap,
     var_names: List[str],
     dimension: Optional[str] = None,
-) -> pd.DataFrame:
+    post_stratify: bool = False,
+) -> List[DimensionMetricData]:
     dfc = rows.copy()
-    dimensions = {}
+    dimensions: Dict[str, InitialMetricDataStrata] = {}
+    dimension_column_name = (
+        "" if not dimension else get_dimension_column_name(dimension)
+    )
+    dimension_column_name = (
+        "" if not dimension else get_dimension_column_name(dimension)
+    )
+
+    if post_stratify:
+        # if post-stratifying, then we need to create a strata column
+        # to ensure data is not collapsed across strata
+        precomputed_dimension_df = dfc.filter(like="dim_exp_")
+        dfc["strata"] = precomputed_dimension_df.astype(str).agg("_".join, axis=1)
+    else:
+        # if not post-stratifying, then all rows are in the same strata
+        # and we will collapse all data into one row per dimension
+        dfc["strata"] = ""
+
     # Each row in the raw SQL result is a dimension/variation combo
-    # We want to end up with one row per dimension
+    # We want to end up with one row per dimension/strata
     for row in dfc.itertuples(index=False):
-        # strip dimension of prefix before `:`
-        dimension_column_name = (
-            "dimension" if not dimension else get_dimension_column_name(dimension)
-        )
         # if not found, try to find a column with "dimension" for backwards compatibility
         # fall back to one unnamed dimension if even that column is not found
         dim = getattr(row, dimension_column_name, getattr(row, "dimension", ""))
-        # If this is the first time we're seeing this dimension, create an empty dict
+        strata = getattr(row, "strata", "")
+
+        # If this is the first time we're seeing this dimension-strata combo, create an empty dict
         if dim not in dimensions:
-            # Overall columns
-            dimensions[dim] = {
+            dimensions[dim] = InitialMetricDataStrata(
+                total_units=0,
+                data={},
+            )
+        if strata not in dimensions[dim].data:
+            dimensions[dim].data[strata] = {
                 "dimension": dim,
-                "variations": len(var_names),
-                "total_users": 0,
+                "strata": strata,
             }
+
             # Add columns for each variation (including baseline)
             for key in var_id_map:
                 i = var_id_map[key]
                 prefix = f"v{i}" if i > 0 else "baseline"
-                dimensions[dim][f"{prefix}_id"] = key
-                dimensions[dim][f"{prefix}_name"] = var_names[i]
+                dimensions[dim].data[strata][f"{prefix}_id"] = key
+                dimensions[dim].data[strata][f"{prefix}_name"] = var_names[i]
                 for col in ROW_COLS:
-                    dimensions[dim][f"{prefix}_{col}"] = 0
+                    dimensions[dim].data[strata][f"{prefix}_{col}"] = 0
 
         # Add this SQL result row into the dimension dict if we recognize the variation
         key = str(row.variation)
         if key in var_id_map:
             i = var_id_map[key]
-            dimensions[dim]["total_users"] += row.users
+            dimensions[dim].total_units += getattr(row, "users", 0)
             prefix = f"v{i}" if i > 0 else "baseline"
 
             # Sum here in case multiple rows per dimension
             for col in SUM_COLS:
                 # Special handling for count, if missing returns a method, so override with user value
                 if col == "count" and callable(getattr(row, col)):
-                    dimensions[dim][f"{prefix}_count"] += getattr(row, "users", 0)
-                else:
-                    dimensions[dim][f"{prefix}_{col}"] += getattr(row, col, 0)
-            for col in NON_SUMMABLE_COLS:
-                if dimensions[dim][f"{prefix}_{col}"] != 0:
-                    raise ValueError(
-                        f"ImplementationError: Non-summable column {col} already has a value for dimension {dim}"
+                    dimensions[dim].data[strata][f"{prefix}_count"] += getattr(
+                        row, "users", 0
                     )
-                dimensions[dim][f"{prefix}_{col}"] = getattr(row, col, 0)
-
-    return pd.DataFrame(dimensions.values())
+                else:
+                    dimensions[dim].data[strata][f"{prefix}_{col}"] += getattr(
+                        row, col, 0
+                    )
+            for col in NON_SUMMABLE_COLS:
+                if dimensions[dim].data[strata][f"{prefix}_{col}"] != 0:
+                    raise ValueError(
+                        f"ImplementationError: Non-summable column {col} already has a value for dimension {dim}/{strata}"
+                    )
+                dimensions[dim].data[strata][f"{prefix}_{col}"] = getattr(row, col, 0)
+    return [
+        DimensionMetricData(
+            dimension=dimension,
+            total_units=dimension_data.total_units,
+            data=pd.DataFrame([s for s in dimension_data.data.values()]),
+        )
+        for dimension, dimension_data in dimensions.items()
+    ]
 
 
 # Limit to the top X dimensions with the most users
 # Merge the rest into an "(other)" dimension
 def reduce_dimensionality(
-    df: pd.DataFrame, max: int = 20, keep_other: bool = True
-) -> pd.DataFrame:
-    num_variations = df.at[0, "variations"]
+    metric_data: List[DimensionMetricData],
+    num_variations: int,
+    max: int = 20,
+    keep_other: bool = True,
+    combine_strata: bool = True,
+) -> List[DimensionMetricData]:
 
-    rows = df.to_dict("records")
-    rows.sort(key=lambda i: i["total_users"], reverse=True)
+    metric_data.sort(key=lambda i: i.total_units, reverse=True)
 
-    newrows = []
+    new_metric_data: List[DimensionMetricData] = []
 
-    for i, row in enumerate(rows):
+    for i, dimension in enumerate(metric_data):
         # For the first few dimensions, keep them as-is
         if i < max:
-            newrows.append(row)
+            new_metric_data.append(dimension)
         # For the rest, merge them into the last dimension
         elif keep_other:
-            current = newrows[max - 1]
-            current["dimension"] = "(other)"
-            current["total_users"] += row["total_users"]
+            current = new_metric_data[max - 1]
+            current.dimension = "(other)"
+            current.data["dimension"] = "(other)"
+            dimension.data["dimension"] = "(other)"
+            current.total_units += dimension.total_units
             for v in range(num_variations):
                 prefix = f"v{v}" if v > 0 else "baseline"
-                for col in SUM_COLS:
-                    current[f"{prefix}_{col}"] += row[f"{prefix}_{col}"]
-
-    return pd.DataFrame(newrows)
+                if combine_strata:
+                    for row in dimension.data.itertuples(index=False):
+                        for col in SUM_COLS:
+                            current.data[f"{prefix}_{col}"] += getattr(
+                                row, f"{prefix}_{col}", 0
+                            )
+                else:
+                    current.data = pd.concat([current.data, dimension.data])
+    # TODO: test that dimension with 21 values collapses correctly
+    return new_metric_data
 
 
 def get_configured_test(
-    row: pd.Series,
-    test_index: int,
+    stats: List[Tuple[TestStatistic, TestStatistic]],
+    total_users: int,
     analysis: AnalysisSettingsForStatsEngine,
     metric: MetricSettingsForStatsEngine,
-    compel_unadjusted: bool = False,
-    use_uncapped: bool = False,
-) -> Union[
-    EffectBayesianABTest,
-    SequentialTwoSidedTTest,
-    TwoSidedTTest,
-    OneSidedTreatmentGreaterTTest,
-    OneSidedTreatmentLesserTTest,
-    SequentialOneSidedTreatmentLesserTTest,
-    SequentialOneSidedTreatmentGreaterTTest,
-]:
-
-    if compel_unadjusted:
-        statistic_type = (
-            "mean"
-            if metric.statistic_type == "mean_ra"
-            else (
-                "ratio"
-                if metric.statistic_type == "ratio_ra"
-                else metric.statistic_type
-            )
-        )
-        unadjusted_metric = dataclasses.replace(metric, statistic_type=statistic_type)
-        stat_a = variation_statistic_from_metric_row(
-            row, "baseline", unadjusted_metric, use_uncapped=False
-        )
-        stat_b = variation_statistic_from_metric_row(
-            row, f"v{test_index}", unadjusted_metric, use_uncapped=False
-        )
-
-    elif use_uncapped:
-        stat_a = variation_statistic_from_metric_row(
-            row, "baseline", metric, use_uncapped=True
-        )
-        stat_b = variation_statistic_from_metric_row(
-            row, f"v{test_index}", metric, use_uncapped=True
-        )
-    else:
-        stat_a = variation_statistic_from_metric_row(
-            row, "baseline", metric, use_uncapped=False
-        )
-        stat_b = variation_statistic_from_metric_row(
-            row, f"v{test_index}", metric, use_uncapped=False
-        )
+    post_stratify: bool = False,
+) -> StatisticalTests:
 
     base_config = {
-        "total_users": row["total_users"],
+        "total_users": total_users,
         "traffic_percentage": analysis.traffic_percentage,
         "phase_length_days": analysis.phase_length_days,
         "difference_type": analysis.difference_type,
+        "post_stratify": post_stratify,
     }
     if analysis.stats_engine == "frequentist":
         if analysis.sequential_testing_enabled:
@@ -318,14 +340,14 @@ def get_configured_test(
             if analysis.one_sided_intervals:
                 if metric.inverse:
                     return SequentialOneSidedTreatmentGreaterTTest(
-                        [(stat_a, stat_b)], sequential_config
+                        stats, sequential_config
                     )
                 else:
                     return SequentialOneSidedTreatmentLesserTTest(
-                        [(stat_a, stat_b)], sequential_config
+                        stats, sequential_config
                     )
             else:
-                return SequentialTwoSidedTTest([(stat_a, stat_b)], sequential_config)
+                return SequentialTwoSidedTTest(stats, sequential_config)
         else:
             config = FrequentistConfig(
                 **base_config,
@@ -333,20 +355,19 @@ def get_configured_test(
             )
             if analysis.one_sided_intervals:
                 if metric.inverse:
-                    return OneSidedTreatmentGreaterTTest([(stat_a, stat_b)], config)
+                    return OneSidedTreatmentGreaterTTest(stats, config)
                 else:
-                    return OneSidedTreatmentLesserTTest([(stat_a, stat_b)], config)
+                    return OneSidedTreatmentLesserTTest(stats, config)
             else:
-                return TwoSidedTTest([(stat_a, stat_b)], config)
+                return TwoSidedTTest(stats, config)
     else:
-        assert type(stat_a) is type(stat_b), "stat_a and stat_b must be of same type."
         prior = GaussianPrior(
             mean=metric.prior_mean,
             variance=pow(metric.prior_stddev, 2),
             proper=metric.prior_proper,
         )
         return EffectBayesianABTest(
-            [(stat_a, stat_b)],
+            stats,
             EffectBayesianConfig(
                 **base_config,
                 inverse=metric.inverse,
@@ -365,11 +386,10 @@ def decision_making_conditions(metric, analysis):
     )
 
 
-def initialize_metric_df(
+def initialize_df(
     df: pd.DataFrame, analysis: AnalysisSettingsForStatsEngine
 ) -> pd.DataFrame:
     num_variations = df.at[0, "variations"]
-    df = df.copy()
     df["srm_p"] = 0
     df["engine"] = analysis.stats_engine
     for i in range(num_variations):
@@ -429,580 +449,401 @@ def initialize_metric_df(
 
 
 def run_mid_experiment_power(
-    s: pd.Series,
-    i: int,
+    total_users: int,
     num_variations: int,
-    test: Union[
-        EffectBayesianABTest,
-        SequentialTwoSidedTTest,
-        TwoSidedTTest,
-        OneSidedTreatmentGreaterTTest,
-        OneSidedTreatmentLesserTTest,
-        SequentialOneSidedTreatmentLesserTTest,
-        SequentialOneSidedTreatmentGreaterTTest,
-    ],
+    effect_moments: EffectMomentsResult,
     res: Union[BayesianTestResult, FrequentistTestResult],
     metric: MetricSettingsForStatsEngine,
     analysis: AnalysisSettingsForStatsEngine,
-) -> pd.Series:
-    s = s.copy()
-    if decision_making_conditions(metric, analysis):
-        s[f"v{i}_decision_making_conditions"] = True
-        config = BaseConfig(
-            difference_type=analysis.difference_type,
-            traffic_percentage=analysis.traffic_percentage,
-            phase_length_days=analysis.phase_length_days,
-            total_users=s["total_users"],
-            alpha=analysis.alpha,
-        )
+) -> PowerResponse:
+    config = BaseConfig(
+        difference_type=analysis.difference_type,
+        traffic_percentage=analysis.traffic_percentage,
+        phase_length_days=analysis.phase_length_days,
+        total_users=total_users,
+        alpha=analysis.alpha,
+    )
 
-        if isinstance(res, BayesianTestResult):
-            prior = GaussianPrior(
-                mean=metric.prior_mean,
-                variance=pow(metric.prior_stddev, 2),
-                proper=metric.prior_proper,
+    if isinstance(res, BayesianTestResult):
+        prior = GaussianPrior(
+            mean=metric.prior_mean,
+            variance=pow(metric.prior_stddev, 2),
+            proper=metric.prior_proper,
+        )
+        p_value_corrected = False
+    else:
+        prior = None
+        p_value_corrected = analysis.p_value_corrected
+
+    power_config = MidExperimentPowerConfig(
+        target_mde=metric.target_mde,
+        num_goal_metrics=analysis.num_goal_metrics,
+        num_variations=num_variations,
+        prior_effect=prior,
+        p_value_corrected=p_value_corrected,
+        sequential=analysis.sequential_testing_enabled,
+        sequential_tuning_parameter=analysis.sequential_tuning_parameter,
+    )
+    mid_experiment_power = MidExperimentPower(
+        effect_moments=effect_moments,
+        test_result=res,
+        config=config,
+        power_config=power_config,
+    )
+    mid_experiment_power_result = mid_experiment_power.calculate_sample_size()
+
+    return PowerResponse(
+        status=mid_experiment_power_result.update_message,
+        errorMessage=mid_experiment_power_result.error,
+        firstPeriodPairwiseSampleSize=mid_experiment_power.pairwise_sample_size,
+        targetMDE=metric.target_mde,
+        sigmahat2Delta=mid_experiment_power.sigmahat_2_delta,
+        priorProper=(
+            mid_experiment_power.prior_effect.proper
+            if mid_experiment_power.prior_effect
+            else None
+        ),
+        priorLiftMean=(
+            mid_experiment_power.prior_effect.mean
+            if mid_experiment_power.prior_effect
+            else None
+        ),
+        priorLiftVariance=(
+            mid_experiment_power.prior_effect.variance
+            if mid_experiment_power.prior_effect
+            else None
+        ),
+        upperBoundAchieved=mid_experiment_power_result.upper_bound_achieved,
+        scalingFactor=mid_experiment_power_result.scaling_factor,
+    )
+
+
+def get_cuped_unadjusted_stat(stat: TestStatistic) -> TestStatistic:
+    if isinstance(stat, RegressionAdjustedStatistic):
+        if isinstance(stat.post_statistic, SampleMeanStatistic):
+            return SampleMeanStatistic(
+                n=stat.post_statistic.n,
+                sum=stat.post_statistic.sum,
+                sum_squares=stat.post_statistic.sum_squares,
             )
-            p_value_corrected = False
         else:
-            prior = None
-            p_value_corrected = analysis.p_value_corrected
-
-        power_config = MidExperimentPowerConfig(
-            target_mde=metric.target_mde,
-            num_goal_metrics=analysis.num_goal_metrics,
-            num_variations=num_variations,
-            prior_effect=prior,
-            p_value_corrected=p_value_corrected,
-            sequential=analysis.sequential_testing_enabled,
-            sequential_tuning_parameter=analysis.sequential_tuning_parameter,
+            return ProportionStatistic(
+                n=stat.post_statistic.n, sum=stat.post_statistic.sum
+            )
+    elif isinstance(stat, RegressionAdjustedRatioStatistic):
+        if isinstance(stat.m_statistic_post, SampleMeanStatistic):
+            m_statistic = SampleMeanStatistic(
+                n=stat.m_statistic_post.n,
+                sum=stat.m_statistic_post.sum,
+                sum_squares=stat.m_statistic_post.sum_squares,
+            )
+        else:
+            m_statistic = ProportionStatistic(
+                n=stat.m_statistic_post.n, sum=stat.m_statistic_post.sum
+            )
+        if isinstance(stat.d_statistic_post, SampleMeanStatistic):
+            d_statistic = SampleMeanStatistic(
+                n=stat.d_statistic_post.n,
+                sum=stat.d_statistic_post.sum,
+                sum_squares=stat.d_statistic_post.sum_squares,
+            )
+        else:
+            d_statistic = ProportionStatistic(
+                n=stat.d_statistic_post.n, sum=stat.d_statistic_post.sum
+            )
+        return RatioStatistic(
+            n=stat.n,
+            m_statistic=m_statistic,
+            d_statistic=d_statistic,
+            m_d_sum_of_products=stat.m_post_d_post_sum_of_products,
         )
-        mid_experiment_power = MidExperimentPower(
-            test.stat_a, test.stat_b, res, config, power_config
-        )
-
-        s[f"v{i}_first_period_pairwise_users"] = (
-            mid_experiment_power.pairwise_sample_size
-        )
-        s[f"v{i}_target_mde"] = metric.target_mde
-        s[f"v{i}_sigmahat_2_delta"] = mid_experiment_power.sigmahat_2_delta
-        if mid_experiment_power.prior_effect:
-            s[f"v{i}_prior_proper"] = mid_experiment_power.prior_effect.proper
-            s[f"v{i}_prior_lift_mean"] = mid_experiment_power.prior_effect.mean
-            s[f"v{i}_prior_lift_variance"] = mid_experiment_power.prior_effect.variance
-        mid_experiment_power_result = mid_experiment_power.calculate_sample_size()
-        s[f"v{i}_power_status"] = mid_experiment_power_result.update_message
-        s[f"v{i}_power_error_message"] = mid_experiment_power_result.error
-        s[f"v{i}_power_upper_bound_achieved"] = (
-            mid_experiment_power_result.upper_bound_achieved
-        )
-        s[f"v{i}_scaling_factor"] = mid_experiment_power_result.scaling_factor
-    return s
+    return stat
 
 
 # Run A/B test analysis for each variation and dimension
 def analyze_metric_df(
-    df: pd.DataFrame,
+    metric_data: List[DimensionMetricData],
+    num_variations: int,
     metric: MetricSettingsForStatsEngine,
     analysis: AnalysisSettingsForStatsEngine,
-) -> pd.DataFrame:
-    num_variations = df.at[0, "variations"]
-    # Add new columns to the dataframe with placeholder values
-    df = initialize_metric_df(df, analysis)
+) -> List[DimensionResponse]:
 
-    def analyze_row(s: pd.Series) -> pd.Series:
-        s = s.copy()
+    def create_supplemental_result(
+        stats: List[Tuple[TestStatistic, TestStatistic]],
+        total_units: int,
+        analysis: AnalysisSettingsForStatsEngine,
+        metric: MetricSettingsForStatsEngine,
+        post_stratify: bool,
+    ) -> Union[BayesianTestResultNoDefaults, FrequentistTestResultNoDefaults]:
+        test = get_configured_test(
+            stats,
+            total_units,
+            analysis=analysis,
+            metric=metric,
+            post_stratify=post_stratify,
+        )
+        test_result = test.compute_result()
+        return (
+            create_test_result_no_defaults_bayesian(test_result)
+            if isinstance(test_result, BayesianTestResult)
+            else create_test_result_no_defaults_frequentist(test_result)
+        )
+
+    def analyze_dimension(dimensionData: DimensionMetricData) -> DimensionResponse:
+        metric_cuped_adjusted = metric.statistic_type in ["ratio_ra", "mean_ra"]
+        d = dimensionData.data
+        variation_data = []
+
         # Loop through each non-baseline variation and run an analysis
         for i in range(1, num_variations):
-            # Run analysis of baseline vs variation
+            control_stats = []
+            variation_stats = []
+            control_stats_uncapped = []
+            variation_stats_uncapped = []
+            control_stats_cuped_unadjusted = []
+            variation_stats_cuped_unadjusted = []
+            # get one statistic per row (should be one row for non-post-stratified tests)
+            for _, row in d.iterrows():
+                stat_control = variation_statistic_from_metric_row(
+                    row, "baseline", metric
+                )
+                stat_variation = variation_statistic_from_metric_row(
+                    row, f"v{i}", metric
+                )
+                control_stats.append(stat_control)
+                variation_stats.append(stat_variation)
+                if metric_cuped_adjusted:
+                    stat_control_cuped_unadjusted = get_cuped_unadjusted_stat(
+                        stat_control
+                    )
+                    stat_variation_cuped_unadjusted = get_cuped_unadjusted_stat(
+                        stat_variation
+                    )
+                    control_stats_cuped_unadjusted.append(stat_control_cuped_unadjusted)
+                    variation_stats_cuped_unadjusted.append(
+                        stat_variation_cuped_unadjusted
+                    )
+                if metric.capped:
+                    stat_control_uncapped = variation_statistic_from_metric_row(
+                        row, "baseline", metric, use_uncapped=True
+                    )
+                    stat_variation_uncapped = variation_statistic_from_metric_row(
+                        row, f"v{i}", metric, use_uncapped=True
+                    )
+                    control_stats_uncapped.append(stat_control_uncapped)
+                    variation_stats_uncapped.append(stat_variation_uncapped)
+
+            stats = list(zip(control_stats, variation_stats))
+            stats_cuped_unadjusted = list(
+                zip(control_stats_cuped_unadjusted, variation_stats_cuped_unadjusted)
+            )
+            stats_uncapped = list(zip(control_stats_uncapped, variation_stats_uncapped))
+
+            # TODO(post-stratification): throw error if post-stratify is false and there are 2+ rows?
+            post_stratify = (
+                analysis.post_stratification_enabled
+                and metric.statistic_type not in ["quantile_event", "quantile_unit"]
+            )
             test = get_configured_test(
-                row=s,
-                test_index=i,
+                stats,
+                dimensionData.total_units,
                 analysis=analysis,
                 metric=metric,
-                use_uncapped=False,
+                post_stratify=post_stratify,
             )
             res = test.compute_result()
 
-            if metric.statistic_type in ["ratio_ra", "mean_ra"]:
-                test_cuped_unadjusted = get_configured_test(
-                    row=s,
-                    test_index=i,
-                    analysis=analysis,
-                    metric=metric,
-                    compel_unadjusted=True,
-                    use_uncapped=False,
+            power_response: Optional[PowerResponse] = None
+            if decision_making_conditions(metric, analysis):
+                power_response = run_mid_experiment_power(
+                    dimensionData.total_units,
+                    num_variations,
+                    test.moments_result,
+                    res,
+                    metric,
+                    analysis,
                 )
-                res_cuped_unadjusted = test_cuped_unadjusted.compute_result()
-            else:
-                test_cuped_unadjusted = None
-                res_cuped_unadjusted = None
-            if metric.capped:
-                test_uncapped = get_configured_test(
-                    row=s,
-                    test_index=i,
-                    analysis=analysis,
-                    metric=metric,
-                    compel_unadjusted=False,
-                    use_uncapped=True,
+
+            metric_response = get_metric_response(d, test.stat_b, i)
+            # Create base variation response first
+            base_variation_response = BaselineResponse(
+                **asdict(metric_response),
+            )
+
+            if stats_cuped_unadjusted:
+                supplemental_results_cuped_unadjusted = create_supplemental_result(
+                    stats_cuped_unadjusted,
+                    dimensionData.total_units,
+                    analysis,
+                    metric,
+                    post_stratify,
                 )
-                res_uncapped = test_uncapped.compute_result()
             else:
-                test_uncapped = None
-                res_uncapped = None
-            if analysis.stats_engine == "bayesian":
-                test_flat_prior = get_configured_test(
-                    row=s,
-                    test_index=i,
-                    analysis=analysis,
+                supplemental_results_cuped_unadjusted = None
+            if stats_uncapped:
+                supplemental_results_uncapped = create_supplemental_result(
+                    stats_uncapped,
+                    dimensionData.total_units,
+                    analysis,
+                    metric,
+                    post_stratify,
+                )
+            else:
+                supplemental_results_uncapped = None
+            if post_stratify:
+                supplemental_results_unstratified = create_supplemental_result(
+                    stats,
+                    dimensionData.total_units,
+                    analysis,
+                    metric=dataclasses.replace(
+                        metric, post_stratification_enabled=False
+                    ),
+                    post_stratify=False,
+                )
+            else:
+                supplemental_results_unstratified = None
+            # Safely build specific response type from base response
+            if isinstance(res, BayesianTestResult):
+                supplemental_results_flat_prior = create_supplemental_result(
+                    stats,
+                    dimensionData.total_units,
+                    analysis,
                     metric=dataclasses.replace(metric, prior_proper=False),
-                    compel_unadjusted=False,
-                    use_uncapped=False,
+                    post_stratify=post_stratify,
                 )
-                res_flat_prior = test_flat_prior.compute_result()
+                res_no_defaults = create_test_result_no_defaults_bayesian(res)
+                variation_response = BayesianVariationResponse(
+                    **asdict(base_variation_response),
+                    **asdict(res_no_defaults),
+                    power=(
+                        power_response
+                        if isinstance(power_response, PowerResponse)
+                        else None
+                    ),
+                    supplementalResultsCupedUnadjusted=(
+                        supplemental_results_cuped_unadjusted
+                        if isinstance(
+                            supplemental_results_cuped_unadjusted,
+                            BayesianTestResultNoDefaults,
+                        )
+                        else None
+                    ),
+                    supplementalResultsUncapped=(
+                        supplemental_results_uncapped
+                        if isinstance(
+                            supplemental_results_uncapped, BayesianTestResultNoDefaults
+                        )
+                        else None
+                    ),
+                    supplementalResultsFlatPrior=(
+                        supplemental_results_flat_prior
+                        if isinstance(
+                            supplemental_results_flat_prior,
+                            BayesianTestResultNoDefaults,
+                        )
+                        else None
+                    ),
+                    supplementalResultsUnstratified=(
+                        supplemental_results_unstratified
+                        if isinstance(
+                            supplemental_results_unstratified,
+                            BayesianTestResultNoDefaults,
+                        )
+                        else None
+                    ),
+                )
+                variation_data.append(variation_response)
+            elif isinstance(res, FrequentistTestResult):
+                res_no_defaults = create_test_result_no_defaults_frequentist(res)
+                variation_response = FrequentistVariationResponse(
+                    **asdict(base_variation_response),
+                    **asdict(res_no_defaults),
+                    power=(
+                        power_response
+                        if isinstance(power_response, PowerResponse)
+                        else None
+                    ),
+                    supplementalResultsCupedUnadjusted=(
+                        supplemental_results_cuped_unadjusted
+                        if isinstance(
+                            supplemental_results_cuped_unadjusted,
+                            FrequentistTestResultNoDefaults,
+                        )
+                        else None
+                    ),
+                    supplementalResultsUncapped=(
+                        supplemental_results_uncapped
+                        if isinstance(
+                            supplemental_results_uncapped,
+                            FrequentistTestResultNoDefaults,
+                        )
+                        else None
+                    ),
+                    supplementalResultsUnstratified=(
+                        supplemental_results_unstratified
+                        if isinstance(
+                            supplemental_results_unstratified,
+                            FrequentistTestResultNoDefaults,
+                        )
+                        else None
+                    ),
+                )
+                variation_data.append(variation_response)
             else:
-                test_flat_prior = None
-                res_flat_prior = None
+                raise ValueError(f"Unexpected test result type: {type(res)}")
 
-            s = run_mid_experiment_power(
-                s, i, num_variations, test, res, metric, analysis
-            )
-            s = store_row_results(
-                s,
-                i,
-                num_variations,
-                metric,
-                test,
-                res,
-                test_cuped_unadjusted,
-                res_cuped_unadjusted,
-                test_uncapped,
-                res_uncapped,
-                test_flat_prior,
-                res_flat_prior,
-            )
+        # replace count with quantile_n for quantile metrics
+        if metric.statistic_type in ["quantile_event", "quantile_unit"]:
+            for i in range(num_variations):
+                prefix = f"v{i}" if i > 0 else "baseline"
+                d[f"{prefix}_count"] = d[f"{prefix}_quantile_n"]
 
-        s["srm_p"] = check_srm(
-            [s["baseline_users"]]
-            + [s[f"v{i}_users"] for i in range(1, num_variations)],
+        # TODO check front-end SRM matches this SRM
+        srm_p = check_srm(
+            [d["baseline_users"].sum()]
+            + [d[f"v{i}_users"].sum() for i in range(1, num_variations)],
             analysis.weights,
         )
-        return s
 
-    return df.apply(analyze_row, axis=1)
-
-
-Test = Union[
-    EffectBayesianABTest,
-    SequentialTwoSidedTTest,
-    TwoSidedTTest,
-    OneSidedTreatmentGreaterTTest,
-    OneSidedTreatmentLesserTTest,
-    SequentialOneSidedTreatmentLesserTTest,
-    SequentialOneSidedTreatmentGreaterTTest,
-]
-TestResult = Union[BayesianTestResult, FrequentistTestResult]
-
-
-def store_variation_moments(
-    s: pd.Series,
-    i: int,
-    num_variations: int,
-    metric: MetricSettingsForStatsEngine,
-    test: Test,
-    test_cuped_unadjusted: Optional[Test],
-    test_uncapped: Optional[Test],
-    test_flat_prior: Optional[Test],
-    res: TestResult,
-    res_cuped_unadjusted: Optional[TestResult],
-    res_uncapped: Optional[TestResult],
-    res_flat_prior: Optional[TestResult],
-) -> pd.Series:
-    s = s.copy()
-    s["baseline_cr"] = test.stat_a.unadjusted_mean
-    s["baseline_mean"] = test.stat_a.unadjusted_mean
-    s["baseline_stddev"] = test.stat_a.stddev
-
-    s[f"v{i}_cr"] = test.stat_b.unadjusted_mean
-    s[f"v{i}_mean"] = test.stat_b.unadjusted_mean
-    s[f"v{i}_stddev"] = test.stat_b.stddev
-
-    if metric.capped and test_uncapped:
-        s[f"v{i}_cr_uncapped"] = test_uncapped.stat_b.unadjusted_mean
-        s[f"v{i}_mean_uncapped"] = test_uncapped.stat_b.unadjusted_mean
-        s[f"v{i}_stddev_uncapped"] = test_uncapped.stat_b.stddev
-
-    if test.stat_a.unadjusted_mean <= 0:
-        # negative or missing control mean
-        s[f"v{i}_expected"] = 0
-    elif res.expected == 0:
-        # if result is not valid, try to return at least the diff
-        s[f"v{i}_expected"] = (
-            test.stat_b.mean - test.stat_a.mean
-        ) / test.stat_a.unadjusted_mean
-    else:
-        # return adjusted/prior-affected guess of expectation
-        s[f"v{i}_expected"] = res.expected
-    if test_cuped_unadjusted and test_cuped_unadjusted.stat_a.unadjusted_mean <= 0:
-        # negative or missing control mean
-        s[f"v{i}_expected_cuped_unadjusted"] = 0
-    elif (
-        test_cuped_unadjusted
-        and res_cuped_unadjusted
-        and res_cuped_unadjusted.expected == 0
-    ):
-        # if result is not valid, try to return at least the diff
-        s[f"v{i}_expected_cuped_unadjusted"] = (
-            test_cuped_unadjusted.stat_b.mean - test_cuped_unadjusted.stat_a.mean
-        ) / test_cuped_unadjusted.stat_a.unadjusted_mean
-    elif res_cuped_unadjusted:
-        s[f"v{i}_expected_cuped_unadjusted"] = res_cuped_unadjusted.expected
-    if test_uncapped and test_uncapped.stat_a.unadjusted_mean <= 0:
-        # negative or missing control mean
-        s[f"v{i}_expected_uncapped"] = 0
-    elif test_uncapped and res_uncapped and res_uncapped.expected == 0:
-        # if result is not valid, try to return at least the diff
-        s[f"v{i}_expected_uncapped"] = (
-            test_uncapped.stat_b.mean - test_uncapped.stat_a.mean
-        ) / test_uncapped.stat_a.unadjusted_mean
-    elif res_uncapped:
-        s[f"v{i}_expected_uncapped"] = res_uncapped.expected
-    if test_flat_prior and test_flat_prior.stat_a.unadjusted_mean <= 0:
-        # negative or missing control mean
-        s[f"v{i}_expected_flat_prior"] = 0
-    elif test_flat_prior and res_flat_prior and res_flat_prior.expected == 0:
-        # if result is not valid, try to return at least the diff
-        s[f"v{i}_expected_flat_prior"] = (
-            test_flat_prior.stat_b.mean - test_flat_prior.stat_a.mean
-        ) / test_flat_prior.stat_a.unadjusted_mean
-    elif res_flat_prior:
-        s[f"v{i}_expected_flat_prior"] = res_flat_prior.expected
-    return s
-
-
-def store_row_results(
-    s: pd.Series,
-    i: int,
-    num_variations: int,
-    metric: MetricSettingsForStatsEngine,
-    test: Test,
-    res: TestResult,
-    test_cuped_unadjusted: Optional[Test],
-    res_cuped_unadjusted: Optional[TestResult],
-    test_uncapped: Optional[Test],
-    res_uncapped: Optional[TestResult],
-    test_flat_prior: Optional[Test],
-    res_flat_prior: Optional[TestResult],
-) -> pd.Series:
-    s = s.copy()
-    s = store_variation_moments(
-        s,
-        i,
-        num_variations,
-        metric,
-        test,
-        test_cuped_unadjusted,
-        test_uncapped,
-        test_flat_prior,
-        res,
-        res_cuped_unadjusted,
-        res_uncapped,
-        res_flat_prior,
-    )
-
-    # Unpack result in Pandas row
-    if isinstance(res, BayesianTestResult):
-        s.at[f"v{i}_risk"] = res.risk
-        s[f"v{i}_risk_type"] = res.risk_type
-        s[f"v{i}_prob_beat_baseline"] = res.chance_to_win
-        if res_cuped_unadjusted and isinstance(
-            res_cuped_unadjusted, BayesianTestResult
-        ):
-            s.at[f"v{i}_risk_cuped_unadjusted"] = res_cuped_unadjusted.risk
-            s[f"v{i}_risk_type_cuped_unadjusted"] = res_cuped_unadjusted.risk_type
-            s[f"v{i}_prob_beat_baseline_cuped_unadjusted"] = (
-                res_cuped_unadjusted.chance_to_win
+        # insert baseline data in the appropriate position, uses test from last variation
+        # but should be the same for the baseline
+        # TODO: refactor to get these statistics directly
+        control_stats = []
+        # get one statistic per row (should be one row for non-post-stratified tests)
+        for _, row in d.iterrows():
+            control_stats.append(
+                variation_statistic_from_metric_row(row, "baseline", metric)
             )
-        if res_uncapped and isinstance(res_uncapped, BayesianTestResult):
-            s.at[f"v{i}_risk_uncapped"] = res_uncapped.risk
-            s[f"v{i}_risk_type_uncapped"] = res_uncapped.risk_type
-            s[f"v{i}_prob_beat_baseline_uncapped"] = res_uncapped.chance_to_win
-        if res_flat_prior and isinstance(res_flat_prior, BayesianTestResult):
-            s.at[f"v{i}_risk_flat_prior"] = res_flat_prior.risk
-            s[f"v{i}_risk_type_flat_prior"] = res_flat_prior.risk_type
-            s[f"v{i}_prob_beat_baseline_flat_prior"] = res_flat_prior.chance_to_win
-    elif isinstance(res, FrequentistTestResult):
-        if res.p_value is not None:
-            s[f"v{i}_p_value"] = res.p_value
-        else:
-            s[f"v{i}_p_value_error_message"] = res.p_value_error_message
-        if res_cuped_unadjusted and isinstance(
-            res_cuped_unadjusted, FrequentistTestResult
-        ):
-            s[f"v{i}_p_value_cuped_unadjusted"] = res_cuped_unadjusted.p_value
-            s[f"v{i}_p_value_error_message_cuped_unadjusted"] = (
-                res_cuped_unadjusted.p_value_error_message
-            )
-        if res_uncapped and isinstance(res_uncapped, FrequentistTestResult):
-            s[f"v{i}_p_value_uncapped"] = res_uncapped.p_value
-            s[f"v{i}_p_value_error_message_uncapped"] = (
-                res_uncapped.p_value_error_message
-            )
+        stats = list(zip(control_stats, control_stats))
+        stat_a_summed, _ = sum_stats(stats)
+        baseline_data = get_metric_response(d, stat_a_summed, 0)
+        variation_data.insert(analysis.baseline_index, baseline_data)
 
-    s.at[f"v{i}_ci"] = res.ci
-    s.at[f"v{i}_uplift"] = asdict(res.uplift)
-    s[f"v{i}_error_message"] = res.error_message
-    if res_cuped_unadjusted:
-        s.at[f"v{i}_ci_cuped_unadjusted"] = res_cuped_unadjusted.ci
-        s.at[f"v{i}_uplift_cuped_unadjusted"] = asdict(res_cuped_unadjusted.uplift)
-        s[f"v{i}_error_message_cuped_unadjusted"] = res_cuped_unadjusted.error_message
-    if res_uncapped:
-        s.at[f"v{i}_ci_uncapped"] = res_uncapped.ci
-        s.at[f"v{i}_uplift_uncapped"] = asdict(res_uncapped.uplift)
-        s[f"v{i}_error_message_uncapped"] = res_uncapped.error_message
-    if res_flat_prior:
-        s.at[f"v{i}_ci_flat_prior"] = res_flat_prior.ci
-        s.at[f"v{i}_uplift_flat_prior"] = asdict(res_flat_prior.uplift)
-        s[f"v{i}_error_message_flat_prior"] = res_flat_prior.error_message
-
-    # replace count with quantile_n for quantile metrics
-    if metric.statistic_type in ["quantile_event", "quantile_unit"]:
-        for i in range(num_variations):
-            prefix = f"v{i}" if i > 0 else "baseline"
-            s[f"{prefix}_count"] = s[f"{prefix}_quantile_n"]
-    return s
-
-
-# Convert final experiment results to a structure that can be easily
-# serialized and used to display results in the GrowthBook front-end
-def format_results(
-    metric: MetricSettingsForStatsEngine, df: pd.DataFrame, baseline_index: int = 0
-) -> List[DimensionResponse]:
-    num_variations = df.at[0, "variations"]
-    results: List[DimensionResponse] = []
-    rows = df.to_dict("records")
-    for row in rows:
-        dim = DimensionResponse(
-            dimension=row["dimension"], srm=row["srm_p"], variations=[]
+        return DimensionResponse(
+            dimension=dimensionData.dimension, srm=srm_p, variations=variation_data
         )
-        baseline_data = format_variation_result(metric, row, 0)
-        variation_data = [
-            format_variation_result(metric, row, v) for v in range(1, num_variations)
-        ]
-        variation_data.insert(baseline_index, baseline_data)
-        dim.variations = variation_data
-        results.append(dim)
-    return results
+
+    return [analyze_dimension(mdat) for mdat in metric_data]
 
 
-def format_variation_result(
-    metric: MetricSettingsForStatsEngine, row: Dict[Hashable, Any], v: int
-) -> VariationResponse:
+def get_metric_response(
+    metric_row: pd.DataFrame, statistic: TestStatistic, v: int
+) -> BaselineResponse:
     prefix = f"v{v}" if v > 0 else "baseline"
 
-    # if quantile_n
     stats = MetricStats(
-        users=row[f"{prefix}_users"],
-        count=row[f"{prefix}_count"],
-        stddev=row[f"{prefix}_stddev"],
-        mean=row[f"{prefix}_mean"],
+        users=metric_row[f"{prefix}_users"].sum(),
+        count=metric_row[f"{prefix}_count"].sum(),
+        stddev=statistic.stddev,
+        mean=statistic.unadjusted_mean,
     )
-    metricResult = {
-        "cr": row[f"{prefix}_cr"],
-        "value": row[f"{prefix}_main_sum"],
-        "users": row[f"{prefix}_users"],
-        "denominator": row[f"{prefix}_denominator_sum"],
-        "stats": stats,
-    }
-
-    if v == 0:
-        # baseline variation
-        return BaselineResponseForComparison(
-            response=BaselineResponse(**metricResult),
-            responseCupedUnadjusted=BaselineResponse(**metricResult),
-        )
-    else:
-        # non-baseline variation
-        if row[f"{prefix}_decision_making_conditions"]:
-            power_response = PowerResponse(
-                status=row[f"{prefix}_power_status"],
-                errorMessage=row[f"{prefix}_power_error_message"],
-                firstPeriodPairwiseSampleSize=row[
-                    f"{prefix}_first_period_pairwise_users"
-                ],
-                targetMDE=row[f"{prefix}_target_mde"],
-                sigmahat2Delta=row[f"{prefix}_sigmahat_2_delta"],
-                priorProper=row[f"{prefix}_prior_proper"],
-                priorLiftMean=row[f"{prefix}_prior_lift_mean"],
-                priorLiftVariance=row[f"{prefix}_prior_lift_variance"],
-                upperBoundAchieved=row[f"{prefix}_power_upper_bound_achieved"],
-                scalingFactor=row[f"{prefix}_scaling_factor"],
-            )
-        else:
-            power_response = None
-
-        # sanitize CIs to replace inf with None
-        ci: ResponseCI = (
-            None if np.isinf(row[f"{prefix}_ci"][0]) else row[f"{prefix}_ci"][0],
-            None if np.isinf(row[f"{prefix}_ci"][1]) else row[f"{prefix}_ci"][1],
-        )
-
-        testResult = {
-            "expected": row[f"{prefix}_expected"],
-            "uplift": row[f"{prefix}_uplift"],
-            "ci": ci,
-            "errorMessage": row[f"{prefix}_error_message"],
-        }
-        if metric.statistic_type in ["ratio_ra", "mean_ra"]:
-            ci_cuped_unadjusted: ResponseCI = (
-                (
-                    None
-                    if np.isinf(row[f"{prefix}_ci_cuped_unadjusted"][0])
-                    else row[f"{prefix}_ci_cuped_unadjusted"][0]
-                ),
-                (
-                    None
-                    if np.isinf(row[f"{prefix}_ci_cuped_unadjusted"][1])
-                    else row[f"{prefix}_ci_cuped_unadjusted"][1]
-                ),
-            )
-            testResultCupedUnadjusted = {
-                "expected": row[f"{prefix}_expected_cuped_unadjusted"],
-                "uplift": row[f"{prefix}_uplift_cuped_unadjusted"],
-                "ci": ci_cuped_unadjusted,
-                "errorMessage": row[f"{prefix}_error_message_cuped_unadjusted"],
-            }
-        else:
-            testResultCupedUnadjusted = {}
-        if metric.capped:
-            metricResultUncapped = {
-                "cr": row[f"{prefix}_cr_uncapped"],
-                "value": row[f"{prefix}_main_sum_uncapped"],
-                "users": row[f"{prefix}_users"],
-                "denominator": row[f"{prefix}_denominator_sum_uncapped"],
-                "stats": stats,
-            }
-            ci_uncapped = (
-                (
-                    None
-                    if np.isinf(row[f"{prefix}_ci_uncapped"][0])
-                    else row[f"{prefix}_ci_uncapped"][0]
-                ),
-                (
-                    None
-                    if np.isinf(row[f"{prefix}_ci_uncapped"][1])
-                    else row[f"{prefix}_ci_uncapped"][1]
-                ),
-            )
-            testResultUncapped = {
-                "expected": row[f"{prefix}_expected_uncapped"],
-                "uplift": row[f"{prefix}_uplift_uncapped"],
-                "ci": ci_uncapped,
-                "errorMessage": row[f"{prefix}_error_message_uncapped"],
-            }
-        else:
-            metricResultUncapped = {}
-            testResultUncapped = {}
-        if row["engine"] == "frequentist":
-            testResultFlatPrior = {}
-        else:
-            ci_flat_prior = (
-                (
-                    None
-                    if np.isinf(row[f"{prefix}_ci_flat_prior"][0])
-                    else row[f"{prefix}_ci_flat_prior"][0]
-                ),
-                (
-                    None
-                    if np.isinf(row[f"{prefix}_ci_flat_prior"][1])
-                    else row[f"{prefix}_ci_flat_prior"][1]
-                ),
-            )
-            testResultFlatPrior = {
-                "expected": row[f"{prefix}_expected_flat_prior"],
-                "uplift": row[f"{prefix}_uplift_flat_prior"],
-                "ci": ci_flat_prior,
-                "errorMessage": row[f"{prefix}_error_message_flat_prior"],
-            }
-        if row["engine"] == "frequentist":
-            response = FrequentistVariationResponse(
-                **metricResult,
-                **testResult,
-                power=power_response,
-                pValue=row[f"{prefix}_p_value"],
-                pValueErrorMessage=row[f"{prefix}_p_value_error_message"],
-            )
-            if metric.statistic_type in ["ratio_ra", "mean_ra"]:
-                response_cuped_unadjusted = FrequentistVariationResponse(
-                    **metricResult,
-                    **testResultCupedUnadjusted,
-                    power=None,
-                    pValue=row[f"{prefix}_p_value_cuped_unadjusted"],
-                    pValueErrorMessage=row[
-                        f"{prefix}_p_value_error_message_cuped_unadjusted"
-                    ],
-                )
-            else:
-                response_cuped_unadjusted = None
-            if metric.capped:
-                response_uncapped = FrequentistVariationResponse(
-                    **metricResultUncapped,
-                    **testResultUncapped,
-                    power=None,
-                    pValue=row[f"{prefix}_p_value_uncapped"],
-                    pValueErrorMessage=row[f"{prefix}_p_value_error_message_uncapped"],
-                )
-            else:
-                response_uncapped = None
-            return FrequentistVariationResponseForComparison(
-                response=response,
-                responseCupedUnadjusted=response_cuped_unadjusted,
-                responseUncapped=response_uncapped,
-            )
-        else:
-            response = BayesianVariationResponse(
-                **metricResult,
-                **testResult,
-                power=power_response,
-                chanceToWin=row[f"{prefix}_prob_beat_baseline"],
-                risk=row[f"{prefix}_risk"],
-                riskType=row[f"{prefix}_risk_type"],
-            )
-            if metric.statistic_type in ["ratio_ra", "mean_ra"]:
-                response_cuped_unadjusted = BayesianVariationResponse(
-                    **metricResult,
-                    **testResultCupedUnadjusted,
-                    power=None,
-                    chanceToWin=row[f"{prefix}_prob_beat_baseline_cuped_unadjusted"],
-                    risk=row[f"{prefix}_risk_cuped_unadjusted"],
-                    riskType=row[f"{prefix}_risk_type_cuped_unadjusted"],
-                )
-            else:
-                response_cuped_unadjusted = None
-            if metric.capped:
-                response_uncapped = BayesianVariationResponse(
-                    **metricResultUncapped,
-                    **testResultUncapped,
-                    power=None,
-                    chanceToWin=row[f"{prefix}_prob_beat_baseline_uncapped"],
-                    risk=row[f"{prefix}_risk_uncapped"],
-                    riskType=row[f"{prefix}_risk_type_uncapped"],
-                )
-            else:
-                response_uncapped = None
-            response_flat_prior = BayesianVariationResponse(
-                **metricResult,
-                **testResultFlatPrior,
-                power=None,
-                chanceToWin=row[f"{prefix}_prob_beat_baseline_flat_prior"],
-                risk=row[f"{prefix}_risk_flat_prior"],
-                riskType=row[f"{prefix}_risk_type_flat_prior"],
-            )
-            return BayesianVariationResponseForComparison(
-                response=response,
-                responseCupedUnadjusted=response_cuped_unadjusted,
-                responseUncapped=response_uncapped,
-                responseFlatPrior=response_flat_prior,
-            )
+    return BaselineResponse(
+        cr=statistic.unadjusted_mean,
+        value=metric_row[f"{prefix}_main_sum"].sum(),
+        users=metric_row[f"{prefix}_users"].sum(),
+        denominator=metric_row[f"{prefix}_denominator_sum"].sum(),
+        stats=stats,
+    )
 
 
 def variation_statistic_from_metric_row(
@@ -1187,18 +1028,20 @@ def process_analysis(
     var_id_map: VarIdMap,
     metric: MetricSettingsForStatsEngine,
     analysis: AnalysisSettingsForStatsEngine,
-) -> pd.DataFrame:
+) -> List[DimensionResponse]:
     # diff data, convert raw sql into df of dimensions, and get rid of extra dimensions
     var_names = analysis.var_names
     max_dimensions = analysis.max_dimensions
 
     # Convert raw SQL result into a dataframe of dimensions
-    df = get_metric_df(
+    metric_data = get_metric_dfs(
         rows=rows,
         var_id_map=var_id_map,
         var_names=var_names,
         dimension=analysis.dimension,
+        post_stratify=analysis.post_stratification_enabled,
     )
+    # inputs for reduce_dimensionality method
     # Limit to the top X dimensions with the most users
     # not possible to just re-sum for quantile metrics,
     # so we throw away "other" dimension
@@ -1207,15 +1050,18 @@ def process_analysis(
         keep_other = False
     if metric.keep_theta and metric.statistic_type == "mean_ra":
         keep_other = False
-    reduced = reduce_dimensionality(
-        df=df,
+
+    reduced_metric_data = reduce_dimensionality(
+        metric_data=metric_data,
+        num_variations=len(var_names),
         max=max_dimensions,
         keep_other=keep_other,
+        combine_strata=not analysis.post_stratification_enabled,
     )
 
-    # Run the analysis for each variation and dimension
     result = analyze_metric_df(
-        df=reduced,
+        metric_data=reduced_metric_data,
+        num_variations=len(var_names),
         metric=metric,
         analysis=analysis,
     )
@@ -1246,6 +1092,7 @@ def process_single_metric(
             ],
         )
     pdrows = pd.DataFrame(rows)
+
     # TODO validate data in rows matches metric settings
 
     # Detect any variations that are not in the returned metric rows
@@ -1269,15 +1116,11 @@ def process_single_metric(
         ):
             continue
         results.append(
-            format_results(
-                metric,
-                process_analysis(
-                    rows=pdrows,
-                    var_id_map=get_var_id_map(a.var_ids),
-                    metric=metric,
-                    analysis=a,
-                ),
-                baseline_index=a.baseline_index,
+            process_analysis(
+                rows=pdrows,
+                var_id_map=get_var_id_map(a.var_ids),
+                metric=metric,
+                analysis=a,
             )
         )
     return ExperimentMetricAnalysis(
@@ -1294,16 +1137,16 @@ def process_single_metric(
 
 
 def create_bandit_statistics(
-    reduced: pd.DataFrame,
+    metric_data: pd.Series,
     metric: MetricSettingsForStatsEngine,
+    num_variations: int,
 ) -> List[BanditStatistic]:
-    num_variations = reduced.at[0, "variations"]
-    s = reduced.iloc[0]
     stats = []
     for i in range(0, num_variations):
         prefix = f"v{i}" if i > 0 else "baseline"
+        # TODO only one row per dimension for bandits
         stat = variation_statistic_from_metric_row(
-            row=s, prefix=prefix, metric=metric, use_uncapped=False
+            row=metric_data, prefix=prefix, metric=metric
         )
         # recast proportion metrics in case they slipped through
         # for bandits we weight by period; iid data over periods no longer holds
@@ -1316,8 +1159,6 @@ def create_bandit_statistics(
         if isinstance(stat, QuantileStatistic):
             raise ValueError("QuantileStatistic not supported for bandits")
         stats.append(stat)
-    raise ValueError(f"stats: {stats}")
-
     return stats
 
 
@@ -1333,14 +1174,16 @@ def preprocess_bandits(
     else:
         pdrows = pd.DataFrame(rows)
         pdrows = pdrows.loc[pdrows[BANDIT_DIMENSION["column"]] == dimension]
-        # convert raw sql into df of periods, and output df where n_rows = periods
-        df = get_metric_df(
+        metric_data = get_metric_dfs(
             rows=pdrows,
             var_id_map=get_var_id_map(bandit_settings.var_ids),
             var_names=bandit_settings.var_names,
             dimension=dimension,
         )
-        bandit_stats = create_bandit_statistics(df, metric)
+        # Bandit analyses only have one dimension and one row as period reduction is done in SQL
+        bandit_stats = create_bandit_statistics(
+            metric_data[0].data.iloc[0], metric, len(bandit_settings.var_names)
+        )
     bandit_prior = GaussianPrior(mean=0, variance=float(1e4), proper=True)
     bandit_config = BanditConfig(
         prior_distribution=bandit_prior,

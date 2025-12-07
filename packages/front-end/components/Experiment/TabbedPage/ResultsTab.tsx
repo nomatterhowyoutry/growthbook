@@ -6,7 +6,7 @@ import {
   ReportInterface,
 } from "back-end/types/report";
 import uniq from "lodash/uniq";
-import { VisualChangesetInterface } from "back-end/types/visual-changeset";
+import { VisualChangesetInterface } from "shared/types/visual-changeset";
 import { SDKConnectionInterface } from "back-end/types/sdk-connection";
 import Link from "next/link";
 import { useRouter } from "next/router";
@@ -15,9 +15,9 @@ import { DEFAULT_STATS_ENGINE } from "shared/constants";
 import {
   getAllMetricIdsFromExperiment,
   getAllMetricSettingsForSnapshot,
-  expandMetricGroups,
 } from "shared/experiments";
 import { isDefined } from "shared/util";
+import { Box, Flex } from "@radix-ui/themes";
 import { useDefinitions } from "@/services/DefinitionsContext";
 import { useUser } from "@/services/UserContext";
 import useOrgSettings from "@/hooks/useOrgSettings";
@@ -31,6 +31,7 @@ import Callout from "@/ui/Callout";
 import Button from "@/ui/Button";
 import track from "@/services/track";
 import { AnalysisBarSettings } from "@/components/Experiment/AnalysisSettingsBar";
+import Metadata from "@/ui/Metadata";
 import AnalysisSettingsSummary from "./AnalysisSettingsSummary";
 import { ExperimentTab } from ".";
 
@@ -83,7 +84,9 @@ export default function ResultsTab({
     getMetricById,
     getProjectById,
     metrics,
+    metricGroups,
     datasources,
+    getSegmentById,
   } = useDefinitions();
 
   const { apiCall } = useAuth();
@@ -112,25 +115,18 @@ export default function ResultsTab({
   const hasRegressionAdjustmentFeature = hasCommercialFeature(
     "regression-adjustment",
   );
-  const { getMetricGroupById } = useDefinitions();
-  const metricAndMetricGroupIds = getAllMetricIdsFromExperiment(
+
+  const segment = getSegmentById(experiment.segment || "");
+
+  const activationMetric = getExperimentMetricById(
+    experiment.activationMetric || "",
+  );
+
+  const allExperimentMetricIds = getAllMetricIdsFromExperiment(
     experiment,
     false,
+    metricGroups,
   );
-
-  const metricGroups = metricAndMetricGroupIds.map((m) =>
-    getMetricGroupById(m),
-  );
-
-  //include metric group metric ids to return correct snapshot settings (specifically regression adjustment)
-  const filteredMetricGroups = metricGroups.filter(isDefined);
-  let allExperimentMetricIds = metricAndMetricGroupIds;
-  if (filteredMetricGroups.length > 0) {
-    allExperimentMetricIds = expandMetricGroups(
-      metricAndMetricGroupIds,
-      filteredMetricGroups,
-    );
-  }
 
   const allExperimentMetrics = allExperimentMetricIds.map((m) =>
     getExperimentMetricById(m),
@@ -223,6 +219,40 @@ export default function ResultsTab({
           {/*todo: docs*/}
         </Callout>
       ) : null}
+
+      <Box>
+        {hasData && (
+          <Flex direction="row" gap="3" mb="4" mt="2">
+            <Metadata
+              label="Engine"
+              value={
+                analysis?.settings?.statsEngine === "frequentist"
+                  ? "Frequentist"
+                  : "Bayesian"
+              }
+            />
+            <Metadata
+              label="CUPED"
+              value={
+                analysis?.settings?.regressionAdjusted ? "Enabled" : "Disabled"
+              }
+            />
+            <Metadata
+              label="Sequential"
+              value={
+                analysis?.settings?.sequentialTesting ? "Enabled" : "Disabled"
+              }
+            />
+            {segment ? <Metadata label="Segment" value={segment.name} /> : null}
+            {activationMetric ? (
+              <Metadata
+                label="Activation Metric"
+                value={activationMetric.name}
+              />
+            ) : null}
+          </Flex>
+        )}
+      </Box>
 
       <div className="appbox">
         {analysisSettingsOpen && (

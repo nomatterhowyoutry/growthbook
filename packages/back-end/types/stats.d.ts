@@ -18,12 +18,15 @@ export type PValueErrorMessage =
   | "NUMERICAL_PVALUE_NOT_CONVERGED"
   | "ALPHA_GREATER_THAN_0.5_FOR_SEQUENTIAL_ONE_SIDED_TEST";
 
-interface BaseVariationResponse {
+interface BaselineResponse {
   cr: number;
   value: number;
   users: number;
   denominator?: number;
   stats: MetricStats;
+}
+
+interface BaseExperimentResults {
   expected?: number;
   uplift?: {
     dist: string;
@@ -32,32 +35,36 @@ interface BaseVariationResponse {
   };
   ci?: [number | null, number | null];
   errorMessage?: string;
-  power?: MetricPowerResponseFromStatsEngine;
 }
 
-interface BayesianVariationResponse extends BaseVariationResponse {
+interface BayesianExperimentResults extends BaseExperimentResults {
   chanceToWin?: number;
   risk?: [number, number];
   riskType?: RiskType;
 }
 
-interface FrequentistVariationResponse extends BaseVariationResponse {
+interface FrequentistExperimentResults extends BaseExperimentResults {
   pValue?: number;
   pValueErrorMessage?: PValueErrorMessage;
 }
 
-export interface FrequentistVariationResponseForComparison {
-  response: FrequentistVariationResponse;
-  responseCupedUnadjusted?: FrequentistVariationResponse;
-  responseUncapped?: FrequentistVariationResponse;
-  responseFlatPrior?: FrequentistVariationResponse;
+interface BayesianVariationResponse
+  extends BaselineResponse,
+    BayesianExperimentResults {
+  power?: MetricPowerResponseFromStatsEngine;
+  supplementalResultsCupedUnadjusted?: BayesianExperimentResults;
+  supplementalResultsUncapped?: BayesianExperimentResults;
+  supplementalResultsUnstratified?: BayesianExperimentResults;
+  supplementalResultsFlatPrior?: BayesianExperimentResults;
 }
 
-export interface BayesianVariationResponseForComparison {
-  response: BayesianVariationResponse;
-  responseCupedUnadjusted?: BayesianVariationResponse;
-  responseUncapped?: BayesianVariationResponse;
-  responseFlatPrior?: BayesianVariationResponse;
+interface FrequentistVariationResponse
+  extends BaselineResponse,
+    FrequentistExperimentResults {
+  power?: MetricPowerResponseFromStatsEngine;
+  supplementalResultsCupedUnadjusted?: FrequentistExperimentResults;
+  supplementalResultsUncapped?: FrequentistExperimentResults;
+  supplementalResultsUnstratified?: FrequentistExperimentResults;
 }
 
 // Keep in sync with gbstats PowerResponse
@@ -80,11 +87,11 @@ interface BaseDimensionResponse {
 }
 
 interface BayesianDimensionResponse extends BaseDimensionResponse {
-  variations: BayesianVariationResponseForComparison[];
+  variations: BayesianVariationResponse[];
 }
 
 interface FrequentistDimensionResponse extends BaseDimensionResponse {
-  variations: FrequentistVariationResponseForComparison[];
+  variations: FrequentistVariationResponse[];
 }
 
 type StatsEngineDimensionResponse =

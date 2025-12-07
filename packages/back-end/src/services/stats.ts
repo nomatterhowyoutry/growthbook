@@ -72,6 +72,7 @@ export interface AnalysisSettingsForStatsEngine {
   traffic_percentage: number;
   num_goal_metrics: number;
   one_sided_intervals?: boolean;
+  post_stratification_enabled?: boolean;
 }
 
 export interface BanditSettingsForStatsEngine {
@@ -176,6 +177,7 @@ export function getAnalysisSettingsForStatsEngine(
     traffic_percentage: coverage,
     num_goal_metrics: settings.numGoalMetrics,
     one_sided_intervals: !!settings.oneSidedIntervals,
+    post_stratification_enabled: !!settings.postStratificationEnabled,
   };
 
   return analysisData;
@@ -463,7 +465,10 @@ export function getMetricsAndQueryDataForStatsEngine(
   else {
     queryData.forEach((query, key) => {
       // Multi-metric query
-      if (key.match(/group_/)) {
+      if (
+        key.match(/group_/) ||
+        query.queryType === "experimentIncrementalRefreshStatistics"
+      ) {
         const rows = query.result as ExperimentFactMetricsQueryResponseRows;
         if (!rows?.length) return;
         const metricIds: (string | null)[] = [];
@@ -565,83 +570,112 @@ function parseStatsEngineResult({
 
         row.variations.forEach((v, i) => {
           const data = dim.variations[i] || {
-            users: v.response.users,
+            users: v.users,
             metrics: {},
           };
-          data.users = Math.max(data.users, v.response.users);
+          data.users = Math.max(data.users, v.users);
 
           // translate null in CI to infinity
-          const ci: [number, number] | undefined = v.response.ci
-            ? [v.response.ci[0] ?? -Infinity, v.response.ci[1] ?? Infinity]
+          const ci: [number, number] | undefined = v.ci
+            ? [v.ci[0] ?? -Infinity, v.ci[1] ?? Infinity]
             : undefined;
           const ciCupedUnadjusted: [number, number] | undefined = v
-            .responseCupedUnadjusted?.ci
+            .supplementalResultsCupedUnadjusted?.ci
             ? [
-                v.responseCupedUnadjusted.ci[0] ?? -Infinity,
-                v.responseCupedUnadjusted.ci[1] ?? Infinity,
+                v.supplementalResultsCupedUnadjusted.ci[0] ?? -Infinity,
+                v.supplementalResultsCupedUnadjusted.ci[1] ?? Infinity,
               ]
             : undefined;
-          const ciUncapped: [number, number] | undefined = v.responseUncapped
+          const ciUncapped: [number, number] | undefined = v.supplementalResultsUncapped
             ?.ci
             ? [
-                v.responseUncapped.ci[0] ?? -Infinity,
-                v.responseUncapped.ci[1] ?? Infinity,
+                v.supplementalResultsUncapped.ci[0] ?? -Infinity,
+                v.supplementalResultsUncapped.ci[1] ?? Infinity,
               ]
             : undefined;
-          const ciFlatPrior: [number, number] | undefined = v.responseFlatPrior
+          const ciFlatPrior: [number, number] | undefined =
+            "supplementalResultsFlatPrior" in v && v.supplementalResultsFlatPrior?.ci
+              ? [
+                  v.supplementalResultsFlatPrior.ci[0] ?? -Infinity,
+                  v.supplementalResultsFlatPrior.ci[1] ?? Infinity,
+                ]
+              : undefined;
+          const ciUnstratified: [number, number] | undefined = v.supplementalResultsUnstratified
             ?.ci
             ? [
-                v.responseFlatPrior.ci[0] ?? -Infinity,
-                v.responseFlatPrior.ci[1] ?? Infinity,
+                v.supplementalResultsUnstratified.ci[0] ?? -Infinity,
+                v.supplementalResultsUnstratified.ci[1] ?? Infinity,
               ]
-            : undefined;      
-          const cupedUnadjustedResult = v.responseCupedUnadjusted
+            : undefined;
+          const cupedUnadjustedResult = v.supplementalResultsCupedUnadjusted
             ? {
                 ci: ciCupedUnadjusted,
-                expected: v.responseCupedUnadjusted.expected,
-                uplift: v.responseCupedUnadjusted.uplift,
-                errorMessage: v.responseCupedUnadjusted.errorMessage,
-                ...(v.responseCupedUnadjusted !== undefined &&
-                "pValue" in v.responseCupedUnadjusted
-                  ? { pValue: v.responseCupedUnadjusted.pValue }
-                  : v.responseCupedUnadjusted !== undefined &&
-                  "chanceToWin" in v.responseCupedUnadjusted
-                  ? { chanceToWin: v.responseCupedUnadjusted.chanceToWin }
-                  : {}),
+                expected: v.supplementalResultsCupedUnadjusted.expected,
+                uplift: v.supplementalResultsCupedUnadjusted.uplift,
+                errorMessage: v.supplementalResultsCupedUnadjusted.errorMessage,
+                ...(v.supplementalResultsCupedUnadjusted !== undefined &&
+                "pValue" in v.supplementalResultsCupedUnadjusted
+                  ? { pValue: v.supplementalResultsCupedUnadjusted.pValue }
+                  : v.supplementalResultsCupedUnadjusted !== undefined &&
+                      "chanceToWin" in v.supplementalResultsCupedUnadjusted
+                    ? { chanceToWin: v.supplementalResultsCupedUnadjusted.chanceToWin }
+                    : {}),
               }
             : {};
-          const uncappedResult = v.responseUncapped
+          const uncappedResult = v.supplementalResultsUncapped
             ? {
-            ci: ciUncapped,
-            expected: v.responseUncapped?.expected,
-            uplift: v.responseUncapped?.uplift,
-            errorMessage: v.responseUncapped?.errorMessage,
-            ...(v.responseUncapped !== undefined &&
-            "pValue" in v.responseUncapped
-              ? { pValue: v.responseUncapped.pValue }
-              : v.responseUncapped !== undefined &&
-                  "chanceToWin" in v.responseUncapped
-                ? { chanceToWin: v.responseUncapped.chanceToWin }
-                : {}),
-          } : {};
+                ci: ciUncapped,
+                expected: v.supplementalResultsUncapped?.expected,
+                uplift: v.supplementalResultsUncapped?.uplift,
+                errorMessage: v.supplementalResultsUncapped?.errorMessage,
+                ...(v.supplementalResultsUncapped !== undefined &&
+                "pValue" in v.supplementalResultsUncapped
+                  ? { pValue: v.supplementalResultsUncapped.pValue }
+                  : v.supplementalResultsUncapped !== undefined &&
+                      "chanceToWin" in v.supplementalResultsUncapped
+                    ? { chanceToWin: v.supplementalResultsUncapped.chanceToWin }
+                    : {}),
+              }
+            : {};
 
-          const flatPriorResult = v.responseFlatPrior
+          const flatPriorResult =
+            "supplementalResultsFlatPrior" in v && v.supplementalResultsFlatPrior
+              ? {
+                  ci: ciFlatPrior,
+                  expected: v.supplementalResultsFlatPrior.expected,
+                  uplift: v.supplementalResultsFlatPrior.uplift,
+                  errorMessage: v.supplementalResultsFlatPrior.errorMessage,
+                  ...("chanceToWin" in v.supplementalResultsFlatPrior
+                    ? {
+                        chanceToWin: v.supplementalResultsFlatPrior.chanceToWin,
+                      }
+                    : {}),
+                }
+              : {};
+          const unstratifiedResult = v.supplementalResultsUnstratified
             ? {
-            ci: ciFlatPrior,
-            expected: v.responseFlatPrior?.expected,
-            uplift: v.responseFlatPrior?.uplift,
-            errorMessage: v.responseFlatPrior?.errorMessage,
-            ...(v.responseFlatPrior !== undefined &&
-            "chanceToWin" in v.responseFlatPrior
-            ? { chanceToWin: v.responseFlatPrior.chanceToWin }
-            : {}),
-          } : {};
+                ci: ciUnstratified,
+                expected: v.supplementalResultsUnstratified?.expected,
+                uplift: v.supplementalResultsUnstratified?.uplift,
+                errorMessage: v.supplementalResultsUnstratified?.errorMessage,
+                ...(v.supplementalResultsUnstratified !== undefined &&
+                "pValue" in v.supplementalResultsUnstratified
+                  ? { pValue: v.supplementalResultsUnstratified.pValue }
+                  : v.supplementalResultsUnstratified !== undefined &&
+                      "chanceToWin" in v.supplementalResultsUnstratified
+                    ? {
+                        chanceToWin: v.supplementalResultsUnstratified.chanceToWin,
+                      }
+                    : {}),
+              }
+            : {};
           const parsedVariation = {
-            ...v.response,
+            ...v,
             ci,
             cupedUnadjustedResult: cupedUnadjustedResult,
             uncappedResult: uncappedResult,
             flatPriorResult: flatPriorResult,
+            unstratifiedResult: unstratifiedResult,
           };
           data.metrics[metric] = {
             ...parsedVariation,

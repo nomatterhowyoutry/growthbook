@@ -1,5 +1,5 @@
 import { databricksCreateTableOptions } from "shared/enterprise";
-import { FormatDialect } from "shared/src/types";
+import { FormatDialect } from "shared/types/sql";
 import { DatabricksConnectionParams } from "back-end/types/integrations/databricks";
 import { runDatabricksQuery } from "back-end/src/services/databricks";
 import { decryptDataSourceParams } from "back-end/src/services/datasource";
@@ -98,6 +98,8 @@ export default class Databricks extends SqlIntegration {
         return "DATE";
       case "timestamp":
         return "TIMESTAMP";
+      case "hll":
+        return "BINARY";
       default: {
         const _: never = dataType;
         throw new Error(`Unsupported data type: ${dataType}`);

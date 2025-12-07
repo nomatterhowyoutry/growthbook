@@ -194,9 +194,11 @@ export async function getSettingsForSnapshotMetrics(
 
   const metricMap = await getMetricMap(context);
 
+  const metricGroups = await context.models.metricGroups.getAll();
   const allExperimentMetricIds = getAllMetricIdsFromExperiment(
     { guardrailMetrics: safeRollout.guardrailMetricIds },
     false,
+    metricGroups,
   );
   const allExperimentMetrics = allExperimentMetricIds
     .map((id) => metricMap.get(id))
@@ -238,6 +240,9 @@ export function getDefaultExperimentAnalysisSettingsForSafeRollout(
   const hasSequentialTestingFeature = organization
     ? orgHasPremiumFeature(organization, "sequential-testing")
     : false;
+  const hasPostStratificationFeature = organization
+    ? orgHasPremiumFeature(organization, "post-stratification")
+    : false;
   return {
     statsEngine: "frequentist",
     dimensions: [],
@@ -246,6 +251,9 @@ export function getDefaultExperimentAnalysisSettingsForSafeRollout(
       (regressionAdjustmentEnabled !== undefined
         ? regressionAdjustmentEnabled
         : (organization.settings?.regressionAdjustmentEnabled ?? false)),
+    postStratificationEnabled:
+      hasPostStratificationFeature &&
+      !(organization.settings?.postStratificationDisabled ?? false),
     sequentialTesting:
       hasSequentialTestingFeature &&
       !!organization.settings?.sequentialTestingEnabled,
@@ -310,9 +318,13 @@ function getSafeRolloutSnapshotSettings({
   );
 
   const metricSettings = expandMetricGroups(
-    getAllMetricIdsFromExperiment({
-      guardrailMetrics: safeRollout.guardrailMetricIds,
-    }),
+    getAllMetricIdsFromExperiment(
+      {
+        guardrailMetrics: safeRollout.guardrailMetricIds,
+      },
+      true,
+      metricGroups,
+    ),
     metricGroups,
   )
     .map((m) =>

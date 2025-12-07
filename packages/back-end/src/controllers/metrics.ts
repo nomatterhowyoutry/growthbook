@@ -2,6 +2,7 @@ import { Response } from "express";
 import { isFactMetricId } from "shared/experiments";
 import { daysBetween } from "shared/dates";
 import { isDefined } from "shared/util";
+import { IdeaInterface } from "shared/types/idea";
 import {
   AuthRequest,
   ResponseWithStatusAndError,
@@ -29,7 +30,6 @@ import {
   getMetricsByDatasource,
   generateMetricEmbeddings,
 } from "back-end/src/models/MetricModel";
-import { IdeaInterface } from "back-end/types/idea";
 
 import { getDataSourceById } from "back-end/src/models/DataSourceModel";
 import { getIdeasByQuery } from "back-end/src/services/ideas";
@@ -450,12 +450,9 @@ export async function postMetrics(
     managedBy,
   } = req.body;
 
-  if (
-    managedBy === "admin" &&
-    !context.hasPremiumFeature("manage-official-resources")
-  ) {
+  if (managedBy === "admin") {
     throw new Error(
-      "Your organization's plan does not support creating official metrics.",
+      "We have deprecated support for marking Legacy Metrics as Official via the UI. We suggest using Fact Metrics instead.",
     );
   }
 

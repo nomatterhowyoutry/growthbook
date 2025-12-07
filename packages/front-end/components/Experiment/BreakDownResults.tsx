@@ -1,4 +1,4 @@
-import { FC, useMemo, useState } from "react";
+import { FC, useState } from "react";
 import {
   ExperimentReportResultDimension,
   ExperimentReportVariation,
@@ -14,40 +14,23 @@ import {
   PValueCorrection,
   StatsEngine,
 } from "back-end/types/stats";
-import {
-  expandMetricGroups,
-  ExperimentMetricInterface,
-  quantileMetricType,
-  setAdjustedCIs,
-  setAdjustedPValuesOnResults,
-} from "shared/experiments";
-import { isDefined } from "shared/util";
-import { FaAngleRight, FaUsers } from "react-icons/fa";
+import { ExperimentMetricInterface } from "shared/experiments";
+import { FaCaretRight } from "react-icons/fa";
 import Collapsible from "react-collapsible";
 import { useDefinitions } from "@/services/DefinitionsContext";
-import {
-  applyMetricOverrides,
-  ExperimentTableRow,
-  compareRows,
-} from "@/services/experiments";
 import ResultsTable, {
   RESULTS_TABLE_COLUMNS,
-  RowError,
 } from "@/components/Experiment/ResultsTable";
 import { QueryStatusData } from "@/components/Queries/RunQueriesButton";
 import { getRenderLabelColumn } from "@/components/Experiment/CompactResults";
-import usePValueThreshold from "@/hooks/usePValueThreshold";
-import {
-  ResultsMetricFilters,
-  sortAndFilterMetricsByTags,
-} from "@/components/Experiment/Results";
+import { ResultsMetricFilters } from "@/components/Experiment/Results";
 import ResultsMetricFilter from "@/components/Experiment/ResultsMetricFilter";
 import { SSRPolyfills } from "@/hooks/useSSRPolyfills";
+import { useExperimentDimensionRows } from "@/hooks/useExperimentDimensionRows";
 import useOrgSettings from "@/hooks/useOrgSettings";
-import { useOrganizationMetricDefaults } from "@/hooks/useOrganizationMetricDefaults";
+import Link from "@/ui/Link";
 import UsersTable from "./UsersTable";
 
-const numberFormatter = Intl.NumberFormat();
 export const includeVariation = (
   d: ExperimentReportResultDimension,
   dimensionValuesFilter?: string[],
@@ -57,24 +40,6 @@ export const includeVariation = (
     dimensionValuesFilter.length === 0 ||
     dimensionValuesFilter.includes(d.name)
   );
-};
-
-export function getMetricResultGroup(
-  metricId,
-  goalMetrics: string[],
-  secondaryMetrics: string[],
-): "goal" | "secondary" | "guardrail" {
-  return goalMetrics.includes(metricId)
-    ? "goal"
-    : secondaryMetrics.includes(metricId)
-      ? "secondary"
-      : "guardrail";
-}
-
-type TableDef = {
-  metric: ExperimentMetricInterface;
-  isGuardrail: boolean;
-  rows: ExperimentTableRow[];
 };
 
 const BreakDownResults: FC<{
@@ -114,10 +79,13 @@ const BreakDownResults: FC<{
     metric: ExperimentMetricInterface,
   ) => React.ReactElement | string;
   noStickyHeader?: boolean;
-  sortBy?: "metric-tags" | "significance" | "change" | null;
-  setSortBy?: (s: "metric-tags" | "significance" | "change" | null) => void;
+  sortBy?: "metric-tags" | "significance" | "change" | "custom" | null;
+  setSortBy?: (
+    s: "metric-tags" | "significance" | "change" | "custom" | null,
+  ) => void;
   sortDirection?: "asc" | "desc" | null;
   setSortDirection?: (d: "asc" | "desc" | null) => void;
+  customMetricOrder?: string[];
   analysisBarSettings?: {
     variationFilter: number[];
   };
@@ -160,17 +128,12 @@ const BreakDownResults: FC<{
   setSortBy,
   sortDirection,
   setSortDirection,
+  customMetricOrder,
   analysisBarSettings,
 }) => {
   const [showMetricFilter, setShowMetricFilter] = useState<boolean>(false);
 
-  const { getDimensionById, getExperimentMetricById, metricGroups, ready } =
-    useDefinitions();
-  const { metricDefaults } = useOrganizationMetricDefaults();
-
-  const _pValueThreshold = usePValueThreshold();
-  const pValueThreshold =
-    ssrPolyfills?.usePValueThreshold() || _pValueThreshold;
+  const { getDimensionById, getExperimentMetricById } = useDefinitions();
 
   const _settings = useOrgSettings();
   const settings = ssrPolyfills?.useOrgSettings?.() || _settings;
@@ -181,195 +144,24 @@ const BreakDownResults: FC<{
     dimensionId?.split(":")?.[1] ||
     "Dimension";
 
-  const totalUsers = useMemo(() => {
-    let totalUsers = 0;
-    results?.forEach((result) => {
-      if (includeVariation(result, dimensionValuesFilter)) {
-        result?.variations?.forEach((v) => (totalUsers += v?.users || 0));
-      }
-    });
-    return totalUsers;
-  }, [results, dimensionValuesFilter]);
-
-  const { expandedGoals, expandedSecondaries, expandedGuardrails } =
-    useMemo(() => {
-      const expandedGoals = expandMetricGroups(
-        goalMetrics,
-        ssrPolyfills?.metricGroups || metricGroups,
-      );
-      const expandedSecondaries = expandMetricGroups(
-        secondaryMetrics,
-        ssrPolyfills?.metricGroups || metricGroups,
-      );
-      const expandedGuardrails = expandMetricGroups(
-        guardrailMetrics,
-        ssrPolyfills?.metricGroups || metricGroups,
-      );
-
-      return { expandedGoals, expandedSecondaries, expandedGuardrails };
-    }, [
-      goalMetrics,
-      metricGroups,
-      ssrPolyfills?.metricGroups,
-      secondaryMetrics,
-      guardrailMetrics,
-    ]);
-
-  const allMetricTags = useMemo(() => {
-    const allMetricTagsSet: Set<string> = new Set();
-    [...goalMetrics, ...secondaryMetrics, ...guardrailMetrics].forEach(
-      (metricId) => {
-        const metric =
-          ssrPolyfills?.getExperimentMetricById?.(metricId) ||
-          getExperimentMetricById(metricId);
-        metric?.tags?.forEach((tag) => {
-          allMetricTagsSet.add(tag);
-        });
-      },
-    );
-    return [...allMetricTagsSet];
-  }, [
+  const { tables, allMetricTags } = useExperimentDimensionRows({
+    results,
     goalMetrics,
     secondaryMetrics,
     guardrailMetrics,
-    ssrPolyfills,
-    getExperimentMetricById,
-  ]);
-
-  const tables = useMemo<TableDef[]>(() => {
-    if (!ready && !ssrPolyfills) return [];
-    if (pValueCorrection && statsEngine === "frequentist") {
-      // Only include goals in calculation, not secondary or guardrails
-      setAdjustedPValuesOnResults(results, expandedGoals, pValueCorrection);
-      setAdjustedCIs(results, pValueThreshold);
-    }
-
-    const metricDefs = [
-      ...expandedGoals,
-      ...expandedSecondaries,
-      ...expandedGuardrails,
-    ]
-      .map(
-        (metricId) =>
-          ssrPolyfills?.getExperimentMetricById?.(metricId) ||
-          getExperimentMetricById(metricId),
-      )
-      .filter(isDefined);
-    // Only use tag-based sorting when sortBy is "metric-tags"
-    const sortedFilteredMetrics =
-      sortBy === "metric-tags"
-        ? sortAndFilterMetricsByTags(metricDefs, metricFilter)
-        : metricDefs.map((m) => m.id);
-
-    const tables = Array.from(new Set(sortedFilteredMetrics))
-      .map((metricId) => {
-        const metric =
-          ssrPolyfills?.getExperimentMetricById?.(metricId) ||
-          getExperimentMetricById(metricId);
-        if (!metric) return;
-        // Only filter by tags when sortBy is "metric-tags"
-        const ret =
-          sortBy === "metric-tags"
-            ? sortAndFilterMetricsByTags([metric], metricFilter)
-            : [metric.id];
-        if (ret.length === 0) return;
-
-        const { newMetric, overrideFields } = applyMetricOverrides(
-          metric,
-          metricOverrides,
-        );
-        let metricSnapshotSettings: MetricSnapshotSettings | undefined;
-        if (settingsForSnapshotMetrics) {
-          metricSnapshotSettings = settingsForSnapshotMetrics.find(
-            (s) => s.metric === metricId,
-          );
-        }
-        const resultGroup = getMetricResultGroup(
-          metricId,
-          expandedGoals,
-          expandedSecondaries,
-        );
-
-        if (showErrorsOnQuantileMetrics && quantileMetricType(newMetric)) {
-          return {
-            metric: newMetric,
-            isGuardrail: resultGroup === "guardrail",
-            rows: [
-              {
-                label: "",
-                metric: newMetric,
-                variations: [],
-                metricSnapshotSettings,
-                resultGroup,
-                metricOverrideFields: overrideFields,
-                error: RowError.QUANTILE_AGGREGATION_ERROR,
-              },
-            ],
-          };
-        }
-
-        const rows: ExperimentTableRow[] = results
-          .filter((d) => includeVariation(d, dimensionValuesFilter))
-          .map((d) => ({
-            label: d.name,
-            metric: newMetric,
-            variations: d.variations.map((variation) => {
-              return variation.metrics[metricId];
-            }),
-            metricSnapshotSettings,
-            resultGroup,
-            metricOverrideFields: overrideFields,
-          }));
-        return {
-          metric: newMetric,
-          isGuardrail: resultGroup === "guardrail",
-          rows: rows,
-        };
-      })
-      .filter((table) => table?.metric) as TableDef[];
-
-    // Sort rows within each table by significance or change if sortBy is set
-    if (
-      (sortBy === "significance" || sortBy === "change") &&
-      metricDefaults &&
-      sortDirection
-    ) {
-      const sortOptions = {
-        sortBy,
-        variationFilter:
-          analysisBarSettings?.variationFilter ?? variationFilter ?? [],
-        metricDefaults,
-        sortDirection,
-      };
-      return tables.map((table) => ({
-        ...table,
-        rows: [...table.rows].sort((a, b) => compareRows(a, b, sortOptions)),
-      }));
-    }
-
-    return tables;
-  }, [
-    results,
-    expandedGoals,
-    expandedSecondaries,
-    expandedGuardrails,
     metricOverrides,
-    settingsForSnapshotMetrics,
-    pValueCorrection,
-    statsEngine,
-    pValueThreshold,
-    ready,
     ssrPolyfills,
-    getExperimentMetricById,
     metricFilter,
-    dimensionValuesFilter,
-    showErrorsOnQuantileMetrics,
     sortBy,
     sortDirection,
-    analysisBarSettings?.variationFilter,
-    metricDefaults,
-    variationFilter,
-  ]);
+    customMetricOrder,
+    analysisBarSettings,
+    statsEngine,
+    pValueCorrection,
+    settingsForSnapshotMetrics,
+    dimensionValuesFilter,
+    showErrorsOnQuantileMetrics,
+  });
 
   const activationMetricObj = activationMetric
     ? ssrPolyfills?.getExperimentMetricById?.(activationMetric) ||
@@ -394,11 +186,10 @@ const BreakDownResults: FC<{
           <div className="users">
             <Collapsible
               trigger={
-                <div className="d-inline-flex mx-3 align-items-center">
-                  <FaUsers size={16} className="mr-1" />
-                  {numberFormatter.format(totalUsers)} total units
-                  <FaAngleRight className="chevron ml-1" />
-                </div>
+                <Link className="d-inline-flex mx-3 align-items-center">
+                  <FaCaretRight className="chevron mr-1" />
+                  View dimension breakdown
+                </Link>
               }
               transitionTime={100}
             >
@@ -426,15 +217,14 @@ const BreakDownResults: FC<{
         ) : null}
       </div>
       {tables.map((table, i) => {
-        const metric = table.metric;
         return (
           <>
             <h5 className="ml-2 mt-2 position-relative">
-              {expandedGoals.includes(metric.id)
+              {table.rows[0]?.resultGroup === "goal"
                 ? "Goal Metric"
-                : expandedSecondaries.includes(metric.id)
+                : table.rows[0]?.resultGroup === "secondary"
                   ? "Secondary Metric"
-                  : expandedGuardrails.includes(metric.id)
+                  : table.rows[0]?.resultGroup === "guardrail"
                     ? "Guardrail Metric"
                     : null}
             </h5>

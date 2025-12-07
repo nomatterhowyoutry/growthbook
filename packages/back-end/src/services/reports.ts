@@ -17,6 +17,7 @@ import {
   generateSliceString,
   expandAllSliceMetricsInMap,
   parseSliceMetricId,
+  SliceLevelsData,
 } from "shared/experiments";
 import { isDefined } from "shared/util";
 import uniqid from "uniqid";
@@ -25,7 +26,7 @@ import uniq from "lodash/uniq";
 import { pick, omit } from "lodash";
 import { getMetricsByIds } from "back-end/src/models/MetricModel";
 import {
-  ExperimentReportArgs,
+  LegacyExperimentReportArgs,
   ExperimentReportVariation,
   ExperimentSnapshotReportInterface,
   MetricSnapshotSettings,
@@ -58,6 +59,7 @@ import {
 } from "back-end/src/models/ExperimentSnapshotModel";
 import { getSourceIntegrationObject } from "back-end/src/services/datasource";
 import {
+  getAdditionalQueryMetadataForExperiment,
   getDefaultExperimentAnalysisSettings,
   isJoinableMetric,
 } from "back-end/src/services/experiments";
@@ -118,7 +120,7 @@ export function reportArgsFromSnapshot(
   experiment: ExperimentInterface,
   snapshot: ExperimentSnapshotInterface,
   analysisSettings: ExperimentSnapshotAnalysisSettings,
-): ExperimentReportArgs {
+): LegacyExperimentReportArgs {
   const phase = experiment.phases[snapshot.phase];
   if (!phase) {
     throw new Error("Unknown experiment phase");
@@ -157,12 +159,14 @@ export function reportArgsFromSnapshot(
 }
 
 export function getAnalysisSettingsFromReportArgs(
-  args: ExperimentReportArgs,
+  args: LegacyExperimentReportArgs,
 ): ExperimentSnapshotAnalysisSettings {
   return {
     dimensions: args.dimension ? [args.dimension] : [],
     statsEngine: args.statsEngine || DEFAULT_STATS_ENGINE,
     regressionAdjusted: args.regressionAdjustmentEnabled,
+    // legacy report args do not support post stratification
+    postStratificationEnabled: false,
     pValueCorrection: null,
     sequentialTesting: args.sequentialTestingEnabled,
     sequentialTestingTuningParameter: args.sequentialTestingTuningParameter,
@@ -173,7 +177,7 @@ export function getAnalysisSettingsFromReportArgs(
   };
 }
 export function getSnapshotSettingsFromReportArgs(
-  args: ExperimentReportArgs,
+  args: LegacyExperimentReportArgs,
   metricMap: Map<string, ExperimentMetricInterface>,
   factTableMap?: FactTableMap,
   experiment?: ExperimentInterface,
@@ -576,6 +580,9 @@ export async function createReportSnapshot({
     metricMap,
     queryParentId: snapshot.id,
     factTableMap,
+    experimentQueryMetadata: experiment
+      ? getAdditionalQueryMetadataForExperiment(experiment)
+      : null,
   });
   return snapshot;
 }
@@ -832,11 +839,7 @@ export async function generateExperimentReportSSRData({
       name: string;
       description: string;
       baseMetricId: string;
-      sliceLevels: Array<{
-        column: string;
-        columnName: string;
-        level: string | null;
-      }>;
+      sliceLevels: SliceLevelsData[];
       allSliceLevels: string[];
     }>
   > = {};
@@ -857,11 +860,7 @@ export async function generateExperimentReportSSRData({
             name: string;
             description: string;
             baseMetricId: string;
-            sliceLevels: Array<{
-              column: string;
-              columnName: string;
-              level: string | null;
-            }>;
+            sliceLevels: SliceLevelsData[];
             allSliceLevels: string[];
           }> = [];
 
@@ -881,8 +880,8 @@ export async function generateExperimentReportSSRData({
                 sliceLevels: [
                   {
                     column: col.column,
-                    columnName: col.name || col.column,
-                    level: value,
+                    datatype: col.datatype === "boolean" ? "boolean" : "string",
+                    levels: [value],
                   },
                 ],
                 allSliceLevels: col.autoSlices || [],
@@ -902,8 +901,8 @@ export async function generateExperimentReportSSRData({
                 sliceLevels: [
                   {
                     column: col.column,
-                    columnName: col.name || col.column,
-                    level: null,
+                    datatype: col.datatype === "boolean" ? "boolean" : "string",
+                    levels: [], // Empty array for "other" slice
                   },
                 ],
                 allSliceLevels: col.autoSlices || [],

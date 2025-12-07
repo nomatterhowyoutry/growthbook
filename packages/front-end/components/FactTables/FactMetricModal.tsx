@@ -3,7 +3,7 @@ import omit from "lodash/omit";
 import { ReactElement, useEffect, useState } from "react";
 import { FaArrowRight, FaTimes } from "react-icons/fa";
 import { FaTriangleExclamation } from "react-icons/fa6";
-import { Box, Text } from "@radix-ui/themes";
+import { Box, Flex, Text } from "@radix-ui/themes";
 import {
   DEFAULT_PROPER_PRIOR_STDDEV,
   DEFAULT_REGRESSION_ADJUSTMENT_DAYS,
@@ -51,7 +51,7 @@ import SelectField, {
 } from "@/components/Forms/SelectField";
 import MultiSelectField from "@/components/Forms/MultiSelectField";
 import Field from "@/components/Forms/Field";
-import Toggle from "@/components/Forms/Toggle";
+import Switch from "@/ui/Switch";
 import RiskThresholds from "@/components/Metrics/MetricForm/RiskThresholds";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/ui/Tabs";
 import PremiumTooltip from "@/components/Marketing/PremiumTooltip";
@@ -174,6 +174,7 @@ function getColumnOptions({
   datasource,
   includeCount = true,
   includeCountDistinct = false,
+  includeDistinctDates = false,
   includeNumericColumns = true,
   includeStringColumns = false,
   includeJSONFields = false,
@@ -186,6 +187,7 @@ function getColumnOptions({
   datasource: DataSourceInterfaceWithParams | null;
   includeCount?: boolean;
   includeCountDistinct?: boolean;
+  includeDistinctDates?: boolean;
   includeNumericColumns?: boolean;
   includeStringColumns?: boolean;
   includeBooleanColumns?: boolean;
@@ -212,6 +214,12 @@ function getColumnOptions({
     specialColumnOptions.push({
       label: "Count of Rows",
       value: "$$count",
+    });
+  }
+  if (includeDistinctDates) {
+    specialColumnOptions.push({
+      label: "Distinct Dates",
+      value: "$$distinctDates",
     });
   }
 
@@ -396,6 +404,7 @@ function ColumnRefSelector({
   setValue,
   setDatasource,
   includeCountDistinct,
+  includeDistinctDates,
   aggregationType = "unit",
   includeColumn,
   datasource,
@@ -408,6 +417,7 @@ function ColumnRefSelector({
   setDatasource: (datasource: string) => void;
   value: ColumnRef;
   includeCountDistinct?: boolean;
+  includeDistinctDates?: boolean;
   includeColumn?: boolean;
   aggregationType?: "unit" | "event";
   datasource: DataSourceInterfaceWithParams;
@@ -425,6 +435,7 @@ function ColumnRefSelector({
     factTable,
     datasource,
     includeCountDistinct: includeCountDistinct && aggregationType === "unit",
+    includeDistinctDates: includeDistinctDates && aggregationType === "unit",
     includeCount: aggregationType === "unit",
     includeNumericColumns: true,
     includeStringColumns:
@@ -714,6 +725,7 @@ function ColumnRefSelector({
                           value={v}
                           onChange={onValuesChange}
                           placeholder="Any"
+                          delimiters={["Enter", "Tab"]}
                           autoFocus
                         />
                       )}
@@ -1026,22 +1038,26 @@ function getPreviewSQL({
       ? "COUNT(*)"
       : numerator.column === "$$distinctUsers"
         ? "1"
-        : numerator.aggregation === "count distinct"
-          ? `COUNT(DISTINCT ${numerator.column})`
-          : `${(numerator.aggregation ?? "sum").toUpperCase()}(${
-              numerator.column
-            })`;
+        : numerator.column === "$$distinctDates"
+          ? `COUNT(DISTINCT DATE(timestamp))`
+          : numerator.aggregation === "count distinct"
+            ? `COUNT(DISTINCT ${numerator.column})`
+            : `${(numerator.aggregation ?? "sum").toUpperCase()}(${
+                numerator.column
+              })`;
 
   const denominatorCol =
     denominator?.column === "$$count"
       ? "COUNT(*)"
       : denominator?.column === "$$distinctUsers"
         ? "1"
-        : numerator.aggregation === "count distinct"
-          ? `-- HyperLogLog estimation used instead of COUNT DISTINCT\n  COUNT(DISTINCT ${denominator?.column})`
-          : `${(denominator?.aggregation ?? "sum").toUpperCase()}(${
-              denominator?.column
-            })`;
+        : denominator?.column === "$$distinctDates"
+          ? `COUNT(DISTINCT DATE(timestamp))`
+          : denominator?.aggregation === "count distinct"
+            ? `-- HyperLogLog estimation used instead of COUNT DISTINCT\n  COUNT(DISTINCT ${denominator?.column})`
+            : `${(denominator?.aggregation ?? "sum").toUpperCase()}(${
+                denominator?.column
+              })`;
 
   const WHERE = getWHERE({
     factTable: numeratorFactTable,
@@ -1795,16 +1811,20 @@ export default function FactMetricModal({
               ? "count"
               : values.numerator.column === "$$distinctUsers"
                 ? "distinct_users"
-                : values.numerator.aggregation || "sum",
+                : values.numerator.column === "$$distinctDates"
+                  ? "distinct_dates"
+                  : values.numerator.aggregation || "sum",
           numerator_filters: values.numerator.filters.length,
           denominator_agg:
             values.denominator?.column === "$$count"
               ? "count"
               : values.denominator?.column === "$$distinctUsers"
                 ? "distinct_users"
-                : values.denominator?.column
-                  ? values.denominator?.aggregation || "sum"
-                  : "none",
+                : values.denominator?.column === "$$distinctDates"
+                  ? "distinct_dates"
+                  : values.denominator?.column
+                    ? values.denominator?.aggregation || "sum"
+                    : "none",
           denominator_filters: values.denominator?.filters?.length || 0,
           ratio_same_fact_table:
             values.metricType === "ratio" &&
@@ -2133,6 +2153,7 @@ export default function FactMetricModal({
                     }
                     includeColumn={true}
                     setDatasource={setDatasource}
+                    includeDistinctDates={true}
                     datasource={selectedDataSource}
                     disableFactTableSelector={!!initialFactTable}
                     allowChangingDatasource={!datasource}
@@ -2148,14 +2169,15 @@ export default function FactMetricModal({
               ) : type === "quantile" ? (
                 <div>
                   <div className="form-group">
-                    <Toggle
+                    <Switch
                       id="quantileTypeSelector"
                       label="Aggregate by User First"
+                      description="Aggregate by Experiment User before taking quantile?"
                       value={
                         !canUseEventQuantile ||
                         quantileSettings.type !== "event"
                       }
-                      setValue={(unit) => {
+                      onChange={(unit) => {
                         // Event-level quantiles must select a numeric column
                         if (!unit && numerator?.column?.startsWith("$$")) {
                           const column =
@@ -2172,12 +2194,6 @@ export default function FactMetricModal({
                       }}
                       disabled={!canUseEventQuantile}
                     />
-                    <label
-                      htmlFor="quantileTypeSelector"
-                      className="ml-2 cursor-pointer"
-                    >
-                      Aggregate by Experiment User before taking quantile?
-                    </label>
                   </div>
                   <label>
                     {quantileSettings.type === "unit"
@@ -2191,6 +2207,7 @@ export default function FactMetricModal({
                     }
                     includeColumn={true}
                     aggregationType={quantileSettings.type}
+                    includeDistinctDates={true}
                     setDatasource={setDatasource}
                     datasource={selectedDataSource}
                     disableFactTableSelector={!!initialFactTable}
@@ -2216,10 +2233,10 @@ export default function FactMetricModal({
                                 />
                               </label>
                               <div style={{ padding: "6px 0" }}>
-                                <Toggle
+                                <Switch
                                   id="quantileIgnoreZeros"
                                   value={quantileSettings.ignoreZeros}
-                                  setValue={(ignoreZeros) =>
+                                  onChange={(ignoreZeros) =>
                                     form.setValue("quantileSettings", {
                                       ...quantileSettings,
                                       ignoreZeros,
@@ -2263,6 +2280,7 @@ export default function FactMetricModal({
                       }
                       includeColumn={true}
                       includeCountDistinct={true}
+                      includeDistinctDates={true}
                       setDatasource={setDatasource}
                       datasource={selectedDataSource}
                       disableFactTableSelector={!!initialFactTable}
@@ -2288,6 +2306,7 @@ export default function FactMetricModal({
                       }
                       includeColumn={true}
                       includeCountDistinct={true}
+                      includeDistinctDates={true}
                       setDatasource={setDatasource}
                       allowChangingDatasource={false}
                       datasource={selectedDataSource}
@@ -2499,21 +2518,19 @@ export default function FactMetricModal({
                                 }}
                               >
                                 <div className="d-flex my-2 border-bottom"></div>
-                                <div className="form-group mt-3 mb-0 mr-2 form-inline">
-                                  <label
-                                    className="mr-1"
-                                    htmlFor="toggle-regressionAdjustmentEnabled"
-                                  >
-                                    Apply regression adjustment for this metric
-                                  </label>
-                                  <Toggle
+                                <Flex
+                                  direction="column"
+                                  className="form-group mt-3 mb-0 mr-2"
+                                >
+                                  <Switch
                                     id={"toggle-regressionAdjustmentEnabled"}
+                                    label="Apply regression adjustment for this metric"
                                     value={
                                       !!form.watch(
                                         "regressionAdjustmentEnabled",
                                       )
                                     }
-                                    setValue={(value) => {
+                                    onChange={(value) => {
                                       form.setValue(
                                         "regressionAdjustmentEnabled",
                                         value,
@@ -2528,7 +2545,7 @@ export default function FactMetricModal({
                                       : "Off"}
                                     )
                                   </small>
-                                </div>
+                                </Flex>
                                 <div
                                   className="form-group mt-3 mb-1 mr-2"
                                   style={{
