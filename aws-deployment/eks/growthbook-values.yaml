@@ -1,0 +1,84 @@
+global:
+  env:
+    - name: APP_ORIGIN
+      value: "https://growthbook.example.com"  # Update with your domain
+
+frontend:
+  replicaCount: 2
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 80
+  service:
+    port: 3000
+  env:
+    - name: API_HOST
+      value: "https://api.growthbook.example.com"  # Update with your domain
+
+backend:
+  replicaCount: 2
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 80
+  service:
+    port: 3100
+  mongodbEnabled: false  # Set to false if using external MongoDB
+  volumeClaim:
+    enabled: false  # Set to false when using S3
+  env:
+    - name: JWT_SECRET
+      valueFrom:
+        secretKeyRef:
+          name: jwt-secret
+          key: jwt-secret
+    - name: ENCRYPTION_KEY
+      valueFrom:
+        secretKeyRef:
+          name: encryption-key
+          key: encryption-key
+    - name: MONGODB_URI
+      value: "mongodb://user:password@host:27017/growthbook"  # Update with your MongoDB URI
+    - name: NODE_ENV
+      value: "production"
+    - name: UPLOAD_METHOD
+      value: "s3"
+    - name: S3_BUCKET
+      value: ""  # Will be set by Terraform output
+    - name: S3_REGION
+      value: "us-east-1"  # Update with your region
+    - name: S3_DOMAIN
+      value: ""  # Will be set by Terraform output
+  serviceAccount:
+    create: false
+    name: "growthbook-s3"  # Uses IRSA for S3 access
+
+mongodb:
+  enabled: false  # Set to false if using external MongoDB (DocumentDB, Atlas, etc.)
+
+ingress:
+  enabled: true
+  className: "alb"
+  annotations:
+    kubernetes.io/ingress.class: alb
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}, {"HTTPS": 443}]'
+    alb.ingress.kubernetes.io/ssl-redirect: "443"
+    # Uncomment and set your certificate ARN for HTTPS
+    # alb.ingress.kubernetes.io/certificate-arn: "arn:aws:acm:region:account:certificate/cert-id"
+  hosts:
+    - host: growthbook.example.com  # Update with your domain
+      paths:
+        - path: /
+          pathType: ImplementationSpecific
+          service: frontend
+    - host: api.growthbook.example.com  # Update with your domain
+      paths:
+        - path: /
+          pathType: ImplementationSpecific
+          service: backend
+  tls: []
+
