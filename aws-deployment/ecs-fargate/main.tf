@@ -192,6 +192,19 @@ resource "aws_secretsmanager_secret_version" "encryption_key" {
   secret_string = var.encryption_key != "" ? var.encryption_key : random_password.encryption_key.result
 }
 
+resource "aws_secretsmanager_secret" "mongodb_uri" {
+  name = "${var.project_name}-mongodb-uri"
+
+  tags = {
+    Name = "${var.project_name}-mongodb-uri"
+  }
+}
+
+resource "aws_secretsmanager_secret_version" "mongodb_uri" {
+  secret_id     = aws_secretsmanager_secret.mongodb_uri.id
+  secret_string = var.mongodb_uri
+}
+
 resource "random_password" "jwt_secret" {
   length  = 64
   special = false
@@ -268,7 +281,8 @@ resource "aws_iam_role_policy" "ecs_execution_secrets" {
         ]
         Resource = [
           aws_secretsmanager_secret.jwt_secret.arn,
-          aws_secretsmanager_secret.encryption_key.arn
+          aws_secretsmanager_secret.encryption_key.arn,
+          aws_secretsmanager_secret.mongodb_uri.arn
         ]
       }
     ]
@@ -531,10 +545,6 @@ resource "aws_ecs_task_definition" "app" {
             value = "production"
           },
           {
-            name  = "MONGODB_URI"
-            value = var.mongodb_uri
-          },
-          {
             name  = "APP_ORIGIN"
             value = var.app_origin
           },
@@ -570,6 +580,10 @@ resource "aws_ecs_task_definition" "app" {
         {
           name      = "ENCRYPTION_KEY"
           valueFrom = aws_secretsmanager_secret.encryption_key.arn
+        },
+        {
+          name      = "MONGODB_URI"
+          valueFrom = aws_secretsmanager_secret.mongodb_uri.arn
         }
       ]
 
