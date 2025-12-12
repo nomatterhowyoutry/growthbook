@@ -4,11 +4,17 @@ ARG NODE_MAJOR=20
 # Build the python gbstats package
 FROM python:${PYTHON_MAJOR}-slim AS pybuild
 WORKDIR /usr/local/src/app
-# Install system dependencies needed for poetry and building
+# Install system dependencies needed for poetry and building Python packages
+# Scientific Python packages (numpy, pandas, scipy) need additional libraries
 RUN apt-get update && \
   apt-get install -y --no-install-recommends \
   curl \
   build-essential \
+  gfortran \
+  libblas-dev \
+  liblapack-dev \
+  libatlas-base-dev \
+  pkg-config \
   && rm -rf /var/lib/apt/lists/*
 # Upgrade pip and install poetry
 RUN pip3 install --upgrade pip setuptools wheel && \
@@ -19,11 +25,21 @@ ENV POETRY_NO_INTERACTION=1
 ENV POETRY_CACHE_DIR=/tmp/poetry_cache
 COPY ./packages/stats .
 RUN \
+  echo "=== Poetry version ===" && \
   poetry --version && \
-  poetry install --no-root --without dev --no-interaction --no-ansi && \
+  echo "=== Listing files ===" && \
+  ls -la && \
+  echo "=== Checking poetry.lock ===" && \
+  test -f poetry.lock && echo "poetry.lock exists" || echo "WARNING: poetry.lock not found" && \
+  echo "=== Installing dependencies ===" && \
+  poetry install --no-root --without dev --no-interaction --no-ansi -vvv && \
+  echo "=== Building package ===" && \
   poetry build && \
+  echo "=== Exporting requirements ===" && \
   poetry export -f requirements.txt --output requirements.txt && \
-  rm -rf $POETRY_CACHE_DIR
+  echo "=== Cleaning cache ===" && \
+  rm -rf $POETRY_CACHE_DIR && \
+  echo "=== Build complete ==="
 
 # Build the nodejs app
 FROM python:${PYTHON_MAJOR}-slim AS nodebuild
