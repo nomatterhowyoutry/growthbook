@@ -1,0 +1,74 @@
+name: GrowthBook DEV manual deploy
+
+on: workflow_dispatch
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: growthbook-dev-manual-deploy-${{ github.ref_name }}
+
+jobs:
+  deploy:
+    name: deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      AWS_REGION: us-east-1
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5.0.0
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v5.0.0
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          role-session-name: GHA-growthbook-dev-${{ github.actor }}-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2.0.1
+
+      - name: Build, tag, and push image to Amazon ECR
+        id: build-image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: growthbook
+          IMAGE_TAG: development
+        run: |
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> "$GITHUB_OUTPUT"
+      - name: Fill in the new image ID in the Amazon ECS task definition
+        id: task-def
+        uses: aws-actions/amazon-ecs-render-task-definition@v1.8.0
+        with:
+          task-definition: aws-config/growthbook-dev-task.json
+          container-name: growthbook
+          image: ${{ steps.build-image.outputs.image }}
+          environment-variables: |
+            NODE_ENV=development
+            MONGODB_URI=${{ secrets.MONGODB_URI }}
+            JWT_SECRET=${{ secrets.JWT_SECRET }}
+            ENCRYPTION_KEY=${{ secrets.ENCRYPTION_KEY }}
+            APP_ORIGIN=${{ vars.DEV_APP_ORIGIN || 'http://localhost:3000' }}
+            API_HOST=${{ vars.DEV_API_HOST || 'http://localhost:3100' }}
+            UPLOAD_METHOD=${{ vars.DEV_UPLOAD_METHOD || 'local' }}
+            S3_BUCKET=${{ secrets.DEV_S3_BUCKET || '' }}
+            S3_REGION=${{ vars.DEV_S3_REGION || 'us-east-1' }}
+            EMAIL_ENABLED=${{ vars.DEV_EMAIL_ENABLED || 'false' }}
+            EMAIL_HOST=${{ secrets.DEV_EMAIL_HOST || '' }}
+            EMAIL_PORT=${{ secrets.DEV_EMAIL_PORT || '' }}
+            EMAIL_HOST_USER=${{ secrets.DEV_EMAIL_HOST_USER || '' }}
+            EMAIL_HOST_PASSWORD=${{ secrets.DEV_EMAIL_HOST_PASSWORD || '' }}
+            EMAIL_FROM=${{ secrets.DEV_EMAIL_FROM || '' }}
+      - name: Deploy Amazon ECS task definition
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v2.4.0
+        with:
+          task-definition: ${{ steps.task-def.outputs.task-definition }}
+          service: ${{ vars.DEV_ECS_SERVICE || 'growthbook-dev-service' }}
+          cluster: ${{ vars.DEV_ECS_CLUSTER || 'growthbook-dev' }}
+          wait-for-service-stability: true
