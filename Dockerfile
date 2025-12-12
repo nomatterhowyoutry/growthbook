@@ -4,12 +4,26 @@ ARG NODE_MAJOR=20
 # Build the python gbstats package
 FROM python:${PYTHON_MAJOR}-slim AS pybuild
 WORKDIR /usr/local/src/app
+# Install system dependencies needed for poetry and building
+RUN apt-get update && \
+  apt-get install -y --no-install-recommends \
+  curl \
+  build-essential \
+  && rm -rf /var/lib/apt/lists/*
+# Upgrade pip and install poetry
+RUN pip3 install --upgrade pip setuptools wheel && \
+  pip3 install poetry==1.8.5
+# Configure poetry to not create virtual environment (we're in a container)
+ENV POETRY_VENV_CREATE=false
+ENV POETRY_NO_INTERACTION=1
+ENV POETRY_CACHE_DIR=/tmp/poetry_cache
 COPY ./packages/stats .
 RUN \
-  pip3 install poetry==1.8.5  \
-  && poetry install --no-root --without dev --no-interaction --no-ansi \
-  && poetry build \
-  && poetry export -f requirements.txt --output requirements.txt
+  poetry --version && \
+  poetry install --no-root --without dev --no-interaction --no-ansi && \
+  poetry build && \
+  poetry export -f requirements.txt --output requirements.txt && \
+  rm -rf $POETRY_CACHE_DIR
 
 # Build the nodejs app
 FROM python:${PYTHON_MAJOR}-slim AS nodebuild
