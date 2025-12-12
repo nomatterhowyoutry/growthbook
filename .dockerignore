@@ -1,0 +1,99 @@
+# Git
+.git
+.gitignore
+.github
+
+# Documentation
+docs
+*.md
+CODE_OF_CONDUCT.md
+SECURITY.md
+CONTRIBUTING.md
+
+# CI/CD
+.github
+.gitlab-ci.yml
+.travis.yml
+
+# Docker
+docker-compose*.yml
+Dockerfile*
+.dockerignore
+
+# Development
+.vscode
+.idea
+*.swp
+*.swo
+*~
+
+# Node modules (will be installed in container)
+node_modules
+**/node_modules
+
+# Build outputs (will be built in container)
+dist
+build
+.next
+**/dist
+**/build
+**/.next
+
+# Test files
+**/*.test.ts
+**/*.test.tsx
+**/*.spec.ts
+**/*.spec.tsx
+**/test
+**/tests
+**/__tests__
+coverage
+.nyc_output
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+
+# Environment files
+.env
+.env.local
+.env.*.local
+.env.development
+.env.production
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea
+.vscode
+*.code-workspace
+
+# Terraform
+aws-deployment
+*.tfstate
+*.tfstate.*
+.terraform
+
+# AWS config
+aws-config
+
+# Charts
+charts
+
+# Misc
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.svg
+!packages/front-end/public/**/*.png
+!packages/front-end/public/**/*.svg
+!packages/front-end/public/**/*.jpg
+!packages/front-end/public/**/*.jpeg
+!packages/front-end/public/**/*.gif
+

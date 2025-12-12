@@ -14,6 +14,7 @@ jobs:
     name: deploy
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    environment: DEV
     env:
       AWS_REGION: us-east-1
     steps:
@@ -28,6 +29,11 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
           role-session-name: GHA-growthbook-dev-${{ github.actor }}-${{ github.run_id }}
           aws-region: ${{ env.AWS_REGION }}
+      - name: Clean up Docker before build
+        run: |
+          docker system prune -af --volumes || true
+          docker builder prune -af || true
+
       - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2.0.1
@@ -38,10 +44,20 @@ jobs:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           ECR_REPOSITORY: growthbook
           IMAGE_TAG: development
+          DOCKER_BUILDKIT: 1
         run: |
-          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+          docker build \
+            --tag $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG \
+            --progress=plain \
+            .
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
           echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Clean up Docker after build
+        if: always()
+        run: |
+          docker system prune -af --volumes || true
+          docker builder prune -af || true
       - name: Fill in the new image ID in the Amazon ECS task definition
         id: task-def
         uses: aws-actions/amazon-ecs-render-task-definition@v1.8.0
