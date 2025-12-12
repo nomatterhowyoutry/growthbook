@@ -17,26 +17,27 @@ RUN apt-get update && \
   && rm -rf /var/lib/apt/lists/*
 # Upgrade pip and install poetry
 RUN pip3 install --upgrade pip setuptools wheel && \
-  pip3 install poetry==1.8.5
+  pip3 install poetry==1.8.5 poetry-plugin-export
 # Configure poetry to not create virtual environment (we're in a container)
 ENV POETRY_VENV_CREATE=false
 ENV POETRY_NO_INTERACTION=1
 ENV POETRY_CACHE_DIR=/tmp/poetry_cache
 COPY ./packages/stats .
-RUN \
-  echo "=== Poetry version ===" && \
-  poetry --version && \
-  echo "=== Listing files ===" && \
-  ls -la && \
+# Check poetry and files
+RUN echo "=== Poetry version ===" && poetry --version && \
+  echo "=== Listing files ===" && ls -la && \
   echo "=== Checking poetry.lock ===" && \
-  test -f poetry.lock && echo "poetry.lock exists" || echo "WARNING: poetry.lock not found" && \
-  echo "=== Installing dependencies ===" && \
-  poetry install --no-root --without dev --no-interaction --no-ansi -vvv && \
-  echo "=== Building package ===" && \
-  poetry build && \
-  echo "=== Exporting requirements ===" && \
-  poetry export -f requirements.txt --output requirements.txt && \
-  echo "=== Cleaning cache ===" && \
+  (test -f poetry.lock && echo "poetry.lock exists" || echo "WARNING: poetry.lock not found")
+# Install dependencies
+RUN echo "=== Installing dependencies ===" && \
+  poetry install --no-root --without dev --no-interaction --no-ansi -vvv
+# Build package
+RUN echo "=== Building package ===" && poetry build
+# Export requirements
+RUN echo "=== Exporting requirements ===" && \
+  poetry export -f requirements.txt --output requirements.txt --without-hashes
+# Cleanup
+RUN echo "=== Cleaning cache ===" && \
   rm -rf $POETRY_CACHE_DIR && \
   echo "=== Build complete ==="
 
