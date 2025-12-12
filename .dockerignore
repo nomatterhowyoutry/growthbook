@@ -39,7 +39,7 @@ build
 **/build
 **/.next
 
-# Test files
+# Test files (but allow Python tests in stats package)
 **/*.test.ts
 **/*.test.tsx
 **/*.spec.ts
@@ -49,6 +49,8 @@ build
 **/__tests__
 coverage
 .nyc_output
+# Allow tests in packages/stats (needed for poetry build)
+!packages/stats/tests
 
 # Logs
 *.log
