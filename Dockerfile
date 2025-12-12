@@ -13,7 +13,6 @@ RUN apt-get update && \
   gfortran \
   libblas-dev \
   liblapack-dev \
-  libatlas-base-dev \
   pkg-config \
   && rm -rf /var/lib/apt/lists/*
 # Upgrade pip and install poetry
