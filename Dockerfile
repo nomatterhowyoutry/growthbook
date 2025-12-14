@@ -73,8 +73,9 @@ RUN yarn install --frozen-lockfile
 RUN yarn postinstall
 # Build the app and do a clean install with only production dependencies
 COPY packages ./packages
+# Build with increased memory and timeout
 RUN \
-  yarn build \
+  NODE_OPTIONS="--max-old-space-size=8192" yarn build \
   && test -f packages/back-end/dist/server.js || (echo "ERROR: packages/back-end/dist/server.js is missing after build!" && exit 1) \
   && rm -rf node_modules \
   && rm -rf packages/back-end/node_modules \

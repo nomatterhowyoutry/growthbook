@@ -13,7 +13,7 @@ jobs:
   deploy:
     name: deploy
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     environment: DEV
     env:
       AWS_REGION: us-east-1
@@ -40,6 +40,7 @@ jobs:
 
       - name: Build, tag, and push image to Amazon ECR
         id: build-image
+        timeout-minutes: 45
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           ECR_REPOSITORY: growthbook
@@ -49,6 +50,7 @@ jobs:
           docker build \
             --tag $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG \
             --progress=plain \
+            --build-arg BUILDKIT_INLINE_CACHE=1 \
             .
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
           echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> "$GITHUB_OUTPUT"
