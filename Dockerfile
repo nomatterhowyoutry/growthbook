@@ -84,8 +84,10 @@ RUN \
   && rm -rf packages/shared/node_modules \
   && rm -rf packages/sdk-js/node_modules \
   && rm -rf packages/sdk-react/node_modules \
-  && yarn install --frozen-lockfile --production=true --ignore-optional
-RUN yarn postinstall
+  && yarn install --frozen-lockfile --production=true --ignore-optional \
+  && yarn postinstall \
+  && rm -rf /root/.cache/yarn \
+  && rm -rf /usr/local/share/.cache/yarn
 
 
 # Package the full app together
@@ -105,9 +107,17 @@ RUN apt-get update && \
   rm -rf /var/lib/apt/lists/*
 COPY --from=pybuild /usr/local/src/app/requirements.txt /usr/local/src/requirements.txt
 RUN pip3 install -r /usr/local/src/requirements.txt && rm -rf /root/.cache/pip
-COPY --from=nodebuild /usr/local/src/app/packages ./packages
-COPY --from=nodebuild /usr/local/src/app/node_modules ./node_modules
+# Copy package files and install production dependencies fresh (smaller than copying node_modules)
+# Copy only what's needed for production install
 COPY --from=nodebuild /usr/local/src/app/package.json ./package.json
+COPY --from=nodebuild /usr/local/src/app/yarn.lock ./yarn.lock
+COPY --from=nodebuild /usr/local/src/app/patches ./patches
+COPY --from=nodebuild /usr/local/src/app/packages ./packages
+# Install only production dependencies (much smaller than copying full node_modules)
+RUN yarn install --frozen-lockfile --production=true --ignore-optional && \
+  yarn postinstall && \
+  rm -rf /root/.cache/yarn \
+  && rm -rf /usr/local/share/.cache/yarn
 
 # wildcard used to act as 'copy if exists'
 COPY buildinfo* ./buildinfo
