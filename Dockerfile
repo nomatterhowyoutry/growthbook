@@ -71,25 +71,36 @@ COPY patches ./patches
 RUN yarn install --frozen-lockfile
 # Apply patches this is not ideal since this should run at the end of yarn install but since node 20 it is not
 RUN yarn postinstall
+# Clean up apt cache to free space
+RUN apt-get clean && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 # Build the app and do a clean install with only production dependencies
 COPY packages ./packages
 # Build with increased memory and timeout
-RUN \
-  NODE_OPTIONS="--max-old-space-size=8192" yarn build \
-  && test -f packages/back-end/dist/server.js || (echo "ERROR: packages/back-end/dist/server.js is missing after build!" && exit 1) \
-  && rm -rf node_modules \
+RUN NODE_OPTIONS="--max-old-space-size=8192" yarn build
+# Verify build output
+RUN test -f packages/back-end/dist/server.js || (echo "ERROR: packages/back-end/dist/server.js is missing after build!" && exit 1)
+# Aggressively clean up build artifacts and caches before production install
+RUN rm -rf node_modules \
   && rm -rf packages/back-end/node_modules \
   && rm -rf packages/front-end/node_modules \
   && rm -rf packages/front-end/.next/cache \
   && rm -rf packages/shared/node_modules \
   && rm -rf packages/sdk-js/node_modules \
   && rm -rf packages/sdk-react/node_modules \
-  && rm -rf /root/.cache/yarn \
+  && rm -rf /root/.cache \
+  && rm -rf /usr/local/share/.cache \
+  && rm -rf /tmp/* \
+  && rm -rf /var/tmp/* \
+  && find /usr/local/src/app -name "*.map" -delete \
+  && find /usr/local/src/app -name "*.tsbuildinfo" -delete \
+  && yarn cache clean
+# Install production dependencies with minimal cache
+RUN yarn install --frozen-lockfile --production=true --ignore-optional --network-timeout 100000
+RUN yarn postinstall
+# Final cleanup
+RUN rm -rf /root/.cache/yarn \
   && rm -rf /usr/local/share/.cache/yarn \
-  && yarn install --frozen-lockfile --production=true --ignore-optional \
-  && yarn postinstall \
-  && rm -rf /root/.cache/yarn \
-  && rm -rf /usr/local/share/.cache/yarn
+  && yarn cache clean
 
 
 # Package the full app together
