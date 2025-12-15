@@ -2,13 +2,16 @@
 .git
 .gitignore
 .github
+.gitattributes
 
-# Documentation
+# Documentation (large directory)
 docs
 *.md
+!README.md
 CODE_OF_CONDUCT.md
 SECURITY.md
 CONTRIBUTING.md
+CODEBUILD-SETUP.md
 
 # CI/CD
 .github
@@ -26,6 +29,7 @@ Dockerfile*
 *.swp
 *.swo
 *~
+*.code-workspace
 
 # Node modules (will be installed in container)
 node_modules
@@ -38,6 +42,9 @@ build
 **/dist
 **/build
 **/.next
+**/.cache
+**/coverage
+**/.nyc_output
 
 # Test files (but allow Python tests in stats package)
 **/*.test.ts
@@ -69,33 +76,67 @@ lerna-debug.log*
 # OS files
 .DS_Store
 Thumbs.db
+*.swp
+*.swo
 
-# IDE
-.idea
-.vscode
-*.code-workspace
-
-# Terraform
+# Terraform and AWS config (not needed for build)
 aws-deployment
+aws-config
 *.tfstate
 *.tfstate.*
 .terraform
+*.tfvars
 
-# AWS config
-aws-config
-
-# Charts
+# Charts (not needed for build)
 charts
 
-# Misc
+# Large image/video files (keep only front-end public assets)
 *.png
 *.jpg
 *.jpeg
 *.gif
 *.svg
+*.webp
+*.mp4
+*.pdf
 !packages/front-end/public/**/*.png
 !packages/front-end/public/**/*.svg
 !packages/front-end/public/**/*.jpg
 !packages/front-end/public/**/*.jpeg
 !packages/front-end/public/**/*.gif
+!packages/front-end/public/**/*.webp
+
+# Screenshots and large files
+features-screenshot.png
+growthbook-screenshot.png
+
+# Plop templates (not needed for build)
+plop-templates
+
+# TypeScript build info (will be generated)
+*.tsbuildinfo
+**/*.tsbuildinfo
+
+# Source maps (will be generated)
+*.map
+**/*.map
+
+# Python cache
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info
+.pytest_cache
+.mypy_cache
+
+# Additional exclusions for large directories
+packages/back-end/test
+packages/front-end/test
+packages/sdk-js/test
+packages/sdk-react/test
+packages/shared/test
 

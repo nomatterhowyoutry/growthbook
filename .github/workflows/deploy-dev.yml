@@ -29,10 +29,8 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
           role-session-name: GHA-growthbook-dev-${{ github.actor }}-${{ github.run_id }}
           aws-region: ${{ env.AWS_REGION }}
-      - name: Clean up Docker before build
-        run: |
-          docker system prune -af --volumes || true
-          docker builder prune -af || true
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
       - name: Login to Amazon ECR
         id: login-ecr
@@ -41,32 +39,29 @@ jobs:
       - name: Build, tag, and push image to Amazon ECR
         id: build-image
         timeout-minutes: 45
-        env:
-          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          ECR_REPOSITORY: growthbook
-          IMAGE_TAG: development
-          DOCKER_BUILDKIT: 1
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.login-ecr.outputs.registry }}/growthbook:development
+          cache-from: type=registry,ref=${{ steps.login-ecr.outputs.registry }}/growthbook:buildcache
+          cache-to: type=inline
+          platforms: linux/amd64
+          build-args: |
+            PYTHON_MAJOR=3.11
+            NODE_MAJOR=20
+      
+      - name: Set image output
         run: |
-          docker build \
-            --tag $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG \
-            --progress=plain \
-            --build-arg BUILDKIT_INLINE_CACHE=1 \
-            .
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
-          echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> "$GITHUB_OUTPUT"
-
-      - name: Clean up Docker after build
-        if: always()
-        run: |
-          docker system prune -af --volumes || true
-          docker builder prune -af || true
+          echo "image=${{ steps.login-ecr.outputs.registry }}/growthbook:development" >> "$GITHUB_OUTPUT"
+      
       - name: Fill in the new image ID in the Amazon ECS task definition
         id: task-def
         uses: aws-actions/amazon-ecs-render-task-definition@v1.8.0
         with:
           task-definition: aws-config/growthbook-dev-task.json
           container-name: growthbook
-          image: ${{ steps.build-image.outputs.image }}
+          image: ${{ steps.login-ecr.outputs.registry }}/growthbook:development
           environment-variables: |
             NODE_ENV=development
             MONGODB_URI=${{ secrets.MONGODB_URI }}
