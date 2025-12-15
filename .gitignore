@@ -1,0 +1,47 @@
+coverage
+node_modules
+*.log
+.idea
+.env.local
+dist
+.next
+out
+.DS_Store
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+uploads
+packages/back-end/globalConfig.json
+packages/back-end/dummy
+packages/sdk-js/scripts/test-cases--typed.json
+config.yml
+.vscode/*
+!.vscode/launch.json
+packages/stats/notebooks
+buildinfo/
+back-end-dist/
+*.tsbuildinfo
+
+# Python compiled files
+__pycache__/
+*.py[cod]
+*$py.class
+coverage.xml
+.coverage
+.tox
+.ipynb_checkpoints
+
+# Python virtual environment
+venv/
+.eslintcache
+
+# Docs
+docs/build
+.docusaurus
+.cache-loader
+packages/back-end/src/api/openapi/openapi.tmp.yaml
+
+# package lock files
+package-lock.json
+
+charts/**/*.tgz
