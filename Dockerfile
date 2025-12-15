@@ -1,5 +1,5 @@
 ARG PYTHON_MAJOR=3.11
-ARG NODE_MAJOR=20
+ARG NODE_MAJOR=24
 
 # Build the python gbstats package
 FROM python:${PYTHON_MAJOR}-slim AS pybuild
@@ -15,9 +15,9 @@ RUN apt-get update && \
   liblapack-dev \
   pkg-config \
   && rm -rf /var/lib/apt/lists/*
-# Upgrade pip and install poetry
-RUN pip3 install --upgrade pip setuptools wheel && \
-  pip3 install poetry==1.8.5 poetry-plugin-export
+# Upgrade pip and install poetry (no cache to save space)
+RUN pip3 install --no-cache-dir --upgrade pip setuptools wheel && \
+  pip3 install --no-cache-dir poetry==1.8.5 poetry-plugin-export
 # Configure poetry to not create virtual environment (we're in a container)
 ENV POETRY_VENV_CREATE=false
 ENV POETRY_NO_INTERACTION=1
@@ -28,9 +28,9 @@ RUN echo "=== Poetry version ===" && poetry --version && \
   echo "=== Listing files ===" && ls -la && \
   echo "=== Checking poetry.lock ===" && \
   (test -f poetry.lock && echo "poetry.lock exists" || echo "WARNING: poetry.lock not found")
-# Install dependencies
+# Install dependencies (no cache to save space)
 RUN echo "=== Installing dependencies ===" && \
-  poetry install --no-root --without dev --no-interaction --no-ansi -vvv
+  poetry install --no-root --without dev --no-interaction --no-ansi --no-cache -vvv
 # Build package
 RUN echo "=== Building package ===" && poetry build
 # Export requirements
@@ -112,7 +112,8 @@ RUN apt-get update && \
   apt-get clean && \
   rm -rf /var/lib/apt/lists/*
 COPY --from=pybuild /usr/local/src/app/requirements.txt /usr/local/src/requirements.txt
-RUN pip3 install -r /usr/local/src/requirements.txt && rm -rf /root/.cache/pip
+RUN pip3 install --no-cache-dir -r /usr/local/src/requirements.txt && \
+  rm -rf /root/.cache /root/.pip /tmp/* /var/tmp/*
 # Copy built packages and package files (we'll install production deps here to save space)
 COPY --from=nodebuild /usr/local/src/app/packages ./packages
 COPY --from=nodebuild /usr/local/src/app/package.json ./package.json
@@ -134,7 +135,8 @@ RUN yarn install --frozen-lockfile --production=true --ignore-optional --network
 COPY buildinfo* ./buildinfo
 
 COPY --from=pybuild /usr/local/src/app/dist /usr/local/src/gbstats
-RUN pip3 install /usr/local/src/gbstats/*.whl ddtrace
+RUN pip3 install --no-cache-dir /usr/local/src/gbstats/*.whl ddtrace && \
+  rm -rf /root/.cache /root/.pip /tmp/* /var/tmp/*
 ARG DD_GIT_COMMIT_SHA=""
 ARG DD_GIT_REPOSITORY_URL=https://github.com/growthbook/growthbook.git
 ARG DD_VERSION=""

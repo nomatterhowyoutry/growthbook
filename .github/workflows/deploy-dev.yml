@@ -44,12 +44,11 @@ jobs:
           context: .
           push: true
           tags: ${{ steps.login-ecr.outputs.registry }}/growthbook:development
-          cache-from: type=registry,ref=${{ steps.login-ecr.outputs.registry }}/growthbook:buildcache
-          cache-to: type=inline
+          # No caching to minimize disk space usage
           platforms: linux/amd64
           build-args: |
             PYTHON_MAJOR=3.11
-            NODE_MAJOR=20
+            NODE_MAJOR=24
       
       - name: Set image output
         run: |

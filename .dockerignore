@@ -1,58 +1,70 @@
-# Git
+# Version control
 .git
 .gitignore
 .gitattributes
-
-# CI/CD
 .github
-.gitlab-ci.yml
-.travis.yml
 
-# Documentation (large directory)
+# Docker files
+Dockerfile*
+docker-compose*.yml
+.dockerignore
+
+# Documentation (large files)
 docs
 *.md
 !README.md
-CODE_OF_CONDUCT.md
-SECURITY.md
-CONTRIBUTING.md
-CODEBUILD-SETUP.md
 
-# Docker
-docker-compose*.yml
-Dockerfile*
-.dockerignore
+# CI/CD configs
+.gitlab-ci.yml
+.travis.yml
+Jenkinsfile
 
-# Development
+# Development tools
 .vscode
 .idea
 *.swp
 *.swo
 *~
 *.code-workspace
+.DS_Store
+Thumbs.db
 
-# Node modules (will be installed in container)
+# Node.js - exclude everything that will be installed
 node_modules
 **/node_modules
+**/.yarn
+**/.yarn-integrity
+**/.yarn/cache
+**/.yarn/unplugged
+**/.yarn/build-state.yml
+**/.yarn/install-state.gz
+**/.pnp.*
+package-lock.json
 
 # Build outputs (will be built in container)
 dist
 build
 .next
+out
 **/dist
 **/build
 **/.next
+**/out
 **/.cache
-**/coverage
-**/.nyc_output
+**/.cache-loader
+**/.docusaurus
+buildinfo/
+back-end-dist/
 
-# Test files (but allow Python tests in stats package)
-**/*.test.ts
-**/*.test.tsx
-**/*.spec.ts
-**/*.spec.tsx
+# Test files and coverage
+**/coverage
+**/.coverage
+**/.nyc_output
+**/*.test.*
+**/*.spec.*
+**/__tests__
 **/test
 **/tests
-**/__tests__
 coverage
 .nyc_output
 # Allow tests in packages/stats (needed for poetry build)
@@ -71,12 +83,50 @@ lerna-debug.log*
 .env.*.local
 .env.development
 .env.production
+.env.test
 
-# OS files
-.DS_Store
-Thumbs.db
-*.swp
-*.swo
+# Secrets and configs
+**/config.yml
+**/.secrets
+packages/back-end/uploads
+packages/back-end/globalConfig.json
+packages/back-end/dummy
+packages/sdk-js/scripts/test-cases--typed.json
+
+# Python cache and virtual environments
+__pycache__
+**/__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info
+**/*.egg-info
+venv/
+.venv
+virtualenv/
+.tox
+.ipynb_checkpoints
+packages/stats/**/.pytest_cache
+packages/stats/**/__pycache__
+packages/stats/notebooks
+packages/stats/**/*.ipynb
+
+# TypeScript build artifacts
+*.tsbuildinfo
+**/*.tsbuildinfo
+
+# Source maps (will be generated)
+*.map
+**/*.map
+
+# Linting and formatting
+.eslint*
+.prettier*
+.husky
+**/.eslintcache
 
 # Terraform and AWS config (not needed for build)
 aws-deployment
@@ -88,8 +138,9 @@ aws-config
 
 # Charts (not needed for build)
 charts
+charts/**/*.tgz
 
-# Large image/video files (keep only front-end public assets)
+# Large media files (keep only front-end public assets)
 *.png
 *.jpg
 *.jpeg
@@ -97,6 +148,10 @@ charts
 *.svg
 *.webp
 *.mp4
+*.avi
+*.mov
+*.mkv
+*.webm
 *.pdf
 !packages/front-end/public/**/*.png
 !packages/front-end/public/**/*.svg
@@ -105,37 +160,35 @@ charts
 !packages/front-end/public/**/*.gif
 !packages/front-end/public/**/*.webp
 
-# Screenshots and large files
+# Screenshots
 features-screenshot.png
 growthbook-screenshot.png
 
-# Plop templates (not needed for build)
+# Archives
+*.tar.gz
+*.tar
+*.zip
+*.rar
+*.7z
+*.gz
+*.bz2
+*.xz
+
+# Templates
 plop-templates
+**/templates
+**/*.generated.*
 
-# TypeScript build info (will be generated)
-*.tsbuildinfo
-**/*.tsbuildinfo
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.temp
+**/.tmp
+**/.temp
 
-# Source maps (will be generated)
-*.map
-**/*.map
+# Scripts (not needed in container)
+scripts
 
-# Python cache
-__pycache__
-*.pyc
-*.pyo
-*.pyd
-.Python
-*.so
-*.egg
-*.egg-info
-.pytest_cache
-.mypy_cache
-
-# Additional exclusions for large directories
-packages/back-end/test
-packages/front-end/test
-packages/sdk-js/test
-packages/sdk-react/test
-packages/shared/test
-
+# OpenAPI temp files
+packages/back-end/src/api/openapi/openapi.tmp.yaml
