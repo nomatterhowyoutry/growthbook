@@ -79,21 +79,19 @@ COPY packages ./packages
 RUN NODE_OPTIONS="--max-old-space-size=8192" yarn build
 # Verify build output
 RUN test -f packages/back-end/dist/server.js || (echo "ERROR: packages/back-end/dist/server.js is missing after build!" && exit 1)
-# Aggressively clean up everything - we'll install production deps in final stage
-RUN rm -rf node_modules \
-  && rm -rf packages/back-end/node_modules \
-  && rm -rf packages/front-end/node_modules \
-  && rm -rf packages/front-end/.next/cache \
-  && rm -rf packages/shared/node_modules \
-  && rm -rf packages/sdk-js/node_modules \
-  && rm -rf packages/sdk-react/node_modules \
+# Clean up dev dependencies and reinstall only production deps to save space
+# Remove dev dependencies first
+RUN yarn install --frozen-lockfile --production=true --ignore-optional --network-timeout 100000 \
+  && yarn postinstall \
   && rm -rf /root/.cache \
   && rm -rf /usr/local/share/.cache \
   && rm -rf /tmp/* \
   && rm -rf /var/tmp/* \
-  && find /usr/local/src/app -name "*.map" -delete \
-  && find /usr/local/src/app -name "*.tsbuildinfo" -delete \
   && yarn cache clean
+# Clean up build artifacts and caches
+RUN rm -rf packages/front-end/.next/cache \
+  && find /usr/local/src/app -name "*.map" -delete \
+  && find /usr/local/src/app -name "*.tsbuildinfo" -delete
 
 
 # Package the full app together
@@ -114,22 +112,13 @@ RUN apt-get update && \
 COPY --from=pybuild /usr/local/src/app/requirements.txt /usr/local/src/requirements.txt
 RUN pip3 install --no-cache-dir -r /usr/local/src/requirements.txt && \
   rm -rf /root/.cache /root/.pip /tmp/* /var/tmp/*
-# Copy built packages and package files (we'll install production deps here to save space)
+# Copy built packages, production node_modules, and package files
+# Production deps are already installed in nodebuild stage to avoid disk space issues
 COPY --from=nodebuild /usr/local/src/app/packages ./packages
+COPY --from=nodebuild /usr/local/src/app/node_modules ./node_modules
 COPY --from=nodebuild /usr/local/src/app/package.json ./package.json
 COPY --from=nodebuild /usr/local/src/app/yarn.lock ./yarn.lock
 COPY --from=nodebuild /usr/local/src/app/patches ./patches
-# Clean up everything before installing production deps
-RUN rm -rf /root/.cache \
-  && rm -rf /usr/local/share/.cache \
-  && rm -rf /tmp/* \
-  && rm -rf /var/tmp/*
-# Install production dependencies with maximum cleanup
-RUN yarn install --frozen-lockfile --production=true --ignore-optional --network-timeout 100000 \
-  && yarn postinstall \
-  && rm -rf /root/.cache \
-  && rm -rf /usr/local/share/.cache \
-  && yarn cache clean
 
 # wildcard used to act as 'copy if exists'
 COPY buildinfo* ./buildinfo
