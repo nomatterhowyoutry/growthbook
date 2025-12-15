@@ -1,8 +1,12 @@
 # Git
 .git
 .gitignore
-.github
 .gitattributes
+
+# CI/CD
+.github
+.gitlab-ci.yml
+.travis.yml
 
 # Documentation (large directory)
 docs
@@ -12,11 +16,6 @@ CODE_OF_CONDUCT.md
 SECURITY.md
 CONTRIBUTING.md
 CODEBUILD-SETUP.md
-
-# CI/CD
-.github
-.gitlab-ci.yml
-.travis.yml
 
 # Docker
 docker-compose*.yml
