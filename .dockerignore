@@ -1,29 +1,194 @@
-# Build and test artifacts
+# Version control
 .git
-.github
 .gitignore
-Dockerfile
-docker-compose.yml
+.gitattributes
+.github
+
+# Docker files
+Dockerfile*
+docker-compose*.yml
 .dockerignore
+
+# Documentation (large files)
+docs
+*.md
+!README.md
+
+# CI/CD configs
+.gitlab-ci.yml
+.travis.yml
+Jenkinsfile
+
+# Development tools
+.vscode
+.idea
+*.swp
+*.swo
+*~
+*.code-workspace
+.DS_Store
+Thumbs.db
+
+# Node.js - exclude everything that will be installed
+node_modules
+**/node_modules
+**/.yarn
+**/.yarn-integrity
+**/.yarn/cache
+**/.yarn/unplugged
+**/.yarn/build-state.yml
+**/.yarn/install-state.gz
+**/.pnp.*
+package-lock.json
+
+# Build outputs (will be built in container)
+dist
+build
+.next
+out
+**/dist
+**/build
+**/.next
+**/out
+**/.cache
+**/.cache-loader
+**/.docusaurus
+buildinfo/
+back-end-dist/
+
+# Test files and coverage
+**/coverage
+**/.coverage
+**/.nyc_output
+**/*.test.*
+**/*.spec.*
+**/__tests__
+**/test
+**/tests
+coverage
+.nyc_output
+# Allow tests in packages/stats (needed for poetry build)
+!packages/stats/tests
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+
+# Environment files
+.env
+.env.local
+.env.*.local
+.env.development
+.env.production
+.env.test
+
+# Secrets and configs
+**/config.yml
+**/.secrets
+packages/back-end/uploads
+packages/back-end/globalConfig.json
+packages/back-end/dummy
+packages/sdk-js/scripts/test-cases--typed.json
+
+# Python cache and virtual environments
+__pycache__
+**/__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info
+**/*.egg-info
+venv/
+.venv
+virtualenv/
+.tox
+.ipynb_checkpoints
+packages/stats/**/.pytest_cache
+packages/stats/**/__pycache__
+packages/stats/notebooks
+packages/stats/**/*.ipynb
+
+# TypeScript build artifacts
+*.tsbuildinfo
+**/*.tsbuildinfo
+
+# Source maps (will be generated)
+*.map
+**/*.map
+
+# Linting and formatting
 .eslint*
 .prettier*
 .husky
-*.md
-**/node_modules
-**/coverage
-**/.next
-**/dist
-**/*.log
-**/dummy
+**/.eslintcache
 
-# Docs
-./docs
+# Terraform and AWS config (not needed for build)
+aws-deployment
+aws-config
+*.tfstate
+*.tfstate.*
+.terraform
+*.tfvars
 
-# Secrets / private data
-**/*.env.local
-**/config.yml
-packages/back-end/uploads
+# Charts (not needed for build)
+charts
+charts/**/*.tgz
 
-# Python notebooks and caches
-packages/stats/**/.pytest_cache
-packages/stats/**/__pycache__
+# Large media files (keep only front-end public assets)
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.svg
+*.webp
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.webm
+*.pdf
+!packages/front-end/public/**/*.png
+!packages/front-end/public/**/*.svg
+!packages/front-end/public/**/*.jpg
+!packages/front-end/public/**/*.jpeg
+!packages/front-end/public/**/*.gif
+!packages/front-end/public/**/*.webp
+
+# Screenshots
+features-screenshot.png
+growthbook-screenshot.png
+
+# Archives
+*.tar.gz
+*.tar
+*.zip
+*.rar
+*.7z
+*.gz
+*.bz2
+*.xz
+
+# Templates
+plop-templates
+**/templates
+**/*.generated.*
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.temp
+**/.tmp
+**/.temp
+
+# Scripts (not needed in container)
+scripts
+
+# OpenAPI temp files
+packages/back-end/src/api/openapi/openapi.tmp.yaml

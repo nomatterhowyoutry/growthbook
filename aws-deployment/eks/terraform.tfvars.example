@@ -1,0 +1,26 @@
+# AWS Configuration
+aws_region = "us-east-1"
+project_name = "growthbook"
+
+# EKS Configuration
+eks_cluster_name = "growthbook-eks"
+kubernetes_version = "1.28"
+kubernetes_namespace = "growthbook"
+
+# Network Configuration
+vpc_cidr = "10.0.0.0/16"
+az_count = 2
+
+# Node Group Configuration
+node_instance_type = "t3.medium"  # 2 vCPU, 4 GB RAM
+node_desired_size = 2
+node_min_size = 2
+node_max_size = 10
+
+# Secrets (leave empty to auto-generate)
+jwt_secret = ""
+encryption_key = ""
+
+# Logging
+log_retention_days = 7
+

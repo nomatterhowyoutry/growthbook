@@ -1,15 +1,45 @@
 ARG PYTHON_MAJOR=3.11
-ARG NODE_MAJOR=20
+ARG NODE_MAJOR=24
 
 # Build the python gbstats package
 FROM python:${PYTHON_MAJOR}-slim AS pybuild
 WORKDIR /usr/local/src/app
+# Install system dependencies needed for poetry and building Python packages
+# Scientific Python packages (numpy, pandas, scipy) need additional libraries
+RUN apt-get update && \
+  apt-get install -y --no-install-recommends \
+  curl \
+  build-essential \
+  gfortran \
+  libblas-dev \
+  liblapack-dev \
+  pkg-config \
+  && rm -rf /var/lib/apt/lists/*
+# Upgrade pip and install poetry (no cache to save space)
+RUN pip3 install --no-cache-dir --upgrade pip setuptools wheel && \
+  pip3 install --no-cache-dir poetry==1.8.5 poetry-plugin-export
+# Configure poetry to not create virtual environment (we're in a container)
+ENV POETRY_VENV_CREATE=false
+ENV POETRY_NO_INTERACTION=1
+ENV POETRY_CACHE_DIR=/tmp/poetry_cache
 COPY ./packages/stats .
-RUN \
-  pip3 install poetry==1.8.5  \
-  && poetry install --no-root --without dev --no-interaction --no-ansi \
-  && poetry build \
-  && poetry export -f requirements.txt --output requirements.txt
+# Check poetry and files
+RUN echo "=== Poetry version ===" && poetry --version && \
+  echo "=== Listing files ===" && ls -la && \
+  echo "=== Checking poetry.lock ===" && \
+  (test -f poetry.lock && echo "poetry.lock exists" || echo "WARNING: poetry.lock not found")
+# Install dependencies (no cache to save space)
+RUN echo "=== Installing dependencies ===" && \
+  poetry install --no-root --without dev --no-interaction --no-ansi --no-cache -vvv
+# Build package
+RUN echo "=== Building package ===" && poetry build
+# Export requirements
+RUN echo "=== Exporting requirements ===" && \
+  poetry export -f requirements.txt --output requirements.txt --without-hashes
+# Cleanup
+RUN echo "=== Cleaning cache ===" && \
+  rm -rf $POETRY_CACHE_DIR && \
+  echo "=== Build complete ==="
 
 # Build the nodejs app
 FROM python:${PYTHON_MAJOR}-slim AS nodebuild
@@ -41,20 +71,29 @@ COPY patches ./patches
 RUN yarn install --frozen-lockfile
 # Apply patches this is not ideal since this should run at the end of yarn install but since node 20 it is not
 RUN yarn postinstall
-# Build the app and do a clean install with only production dependencies
+# Clean up apt cache to free space
+RUN apt-get clean && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+# Build the app (we'll install production deps in final stage to save space)
 COPY packages ./packages
-RUN \
-  yarn build \
-  && test -f packages/back-end/dist/server.js || (echo "ERROR: packages/back-end/dist/server.js is missing after build!" && exit 1) \
-  && rm -rf node_modules \
+# Build with increased memory and timeout
+RUN NODE_OPTIONS="--max-old-space-size=8192" yarn build
+# Verify build output
+RUN test -f packages/back-end/dist/server.js || (echo "ERROR: packages/back-end/dist/server.js is missing after build!" && exit 1)
+# Aggressively clean up everything - we'll install production deps in final stage
+RUN rm -rf node_modules \
   && rm -rf packages/back-end/node_modules \
   && rm -rf packages/front-end/node_modules \
   && rm -rf packages/front-end/.next/cache \
   && rm -rf packages/shared/node_modules \
   && rm -rf packages/sdk-js/node_modules \
   && rm -rf packages/sdk-react/node_modules \
-  && yarn install --frozen-lockfile --production=true --ignore-optional
-RUN yarn postinstall
+  && rm -rf /root/.cache \
+  && rm -rf /usr/local/share/.cache \
+  && rm -rf /tmp/* \
+  && rm -rf /var/tmp/* \
+  && find /usr/local/src/app -name "*.map" -delete \
+  && find /usr/local/src/app -name "*.tsbuildinfo" -delete \
+  && yarn cache clean
 
 
 # Package the full app together
@@ -73,16 +112,31 @@ RUN apt-get update && \
   apt-get clean && \
   rm -rf /var/lib/apt/lists/*
 COPY --from=pybuild /usr/local/src/app/requirements.txt /usr/local/src/requirements.txt
-RUN pip3 install -r /usr/local/src/requirements.txt && rm -rf /root/.cache/pip
+RUN pip3 install --no-cache-dir -r /usr/local/src/requirements.txt && \
+  rm -rf /root/.cache /root/.pip /tmp/* /var/tmp/*
+# Copy built packages and package files (we'll install production deps here to save space)
 COPY --from=nodebuild /usr/local/src/app/packages ./packages
-COPY --from=nodebuild /usr/local/src/app/node_modules ./node_modules
 COPY --from=nodebuild /usr/local/src/app/package.json ./package.json
+COPY --from=nodebuild /usr/local/src/app/yarn.lock ./yarn.lock
+COPY --from=nodebuild /usr/local/src/app/patches ./patches
+# Clean up everything before installing production deps
+RUN rm -rf /root/.cache \
+  && rm -rf /usr/local/share/.cache \
+  && rm -rf /tmp/* \
+  && rm -rf /var/tmp/*
+# Install production dependencies with maximum cleanup
+RUN yarn install --frozen-lockfile --production=true --ignore-optional --network-timeout 100000 \
+  && yarn postinstall \
+  && rm -rf /root/.cache \
+  && rm -rf /usr/local/share/.cache \
+  && yarn cache clean
 
 # wildcard used to act as 'copy if exists'
 COPY buildinfo* ./buildinfo
 
 COPY --from=pybuild /usr/local/src/app/dist /usr/local/src/gbstats
-RUN pip3 install /usr/local/src/gbstats/*.whl ddtrace
+RUN pip3 install --no-cache-dir /usr/local/src/gbstats/*.whl ddtrace && \
+  rm -rf /root/.cache /root/.pip /tmp/* /var/tmp/*
 ARG DD_GIT_COMMIT_SHA=""
 ARG DD_GIT_REPOSITORY_URL=https://github.com/growthbook/growthbook.git
 ARG DD_VERSION=""
