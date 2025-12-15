@@ -39,7 +39,10 @@ RUN echo "=== Exporting requirements ===" && \
 # Cleanup
 RUN echo "=== Cleaning cache ===" && \
   rm -rf $POETRY_CACHE_DIR && \
-  echo "=== Build complete ==="
+  echo "=== Build complete ===" && \
+  echo "=== PYBUILD STAGE DISK USAGE ===" && \
+  df -h / && \
+  du -sh /usr/local/src/app 2>/dev/null || echo "App dir size check"
 
 # Build the nodejs app
 FROM python:${PYTHON_MAJOR}-slim AS nodebuild
@@ -68,7 +71,12 @@ COPY packages/sdk-react/package.json ./packages/sdk-react/package.json
 COPY packages/shared/package.json ./packages/shared/package.json
 COPY patches ./patches
 # Yarn install with dev dependencies (will be cached as long as dependencies don't change)
-RUN yarn install --frozen-lockfile
+RUN echo "=== NODEBUILD: Before yarn install ===" && \
+  df -h / && \
+  yarn install --frozen-lockfile && \
+  echo "=== NODEBUILD: After yarn install ===" && \
+  df -h / && \
+  du -sh /usr/local/src/app/node_modules 2>/dev/null || echo "node_modules size check"
 # Apply patches this is not ideal since this should run at the end of yarn install but since node 20 it is not
 RUN yarn postinstall
 # Clean up apt cache to free space
@@ -76,22 +84,36 @@ RUN apt-get clean && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 # Build the app (we'll install production deps in final stage to save space)
 COPY packages ./packages
 # Build with increased memory and timeout
-RUN NODE_OPTIONS="--max-old-space-size=8192" yarn build
+RUN echo "=== NODEBUILD: Before yarn build ===" && \
+  df -h / && \
+  NODE_OPTIONS="--max-old-space-size=8192" yarn build && \
+  echo "=== NODEBUILD: After yarn build ===" && \
+  df -h / && \
+  du -sh /usr/local/src/app/packages 2>/dev/null || echo "packages size check"
 # Verify build output
 RUN test -f packages/back-end/dist/server.js || (echo "ERROR: packages/back-end/dist/server.js is missing after build!" && exit 1)
 # Clean up dev dependencies and reinstall only production deps to save space
 # Remove dev dependencies first
-RUN yarn install --frozen-lockfile --production=true --ignore-optional --network-timeout 100000 \
+RUN echo "=== NODEBUILD: Before production install ===" && \
+  df -h / && \
+  du -sh /usr/local/src/app/node_modules 2>/dev/null || echo "node_modules size before" && \
+  yarn install --frozen-lockfile --production=true --ignore-optional --network-timeout 100000 \
   && yarn postinstall \
   && rm -rf /root/.cache \
   && rm -rf /usr/local/share/.cache \
   && rm -rf /tmp/* \
   && rm -rf /var/tmp/* \
-  && yarn cache clean
+  && yarn cache clean && \
+  echo "=== NODEBUILD: After production install ===" && \
+  df -h / && \
+  du -sh /usr/local/src/app/node_modules 2>/dev/null || echo "node_modules size after"
 # Clean up build artifacts and caches
 RUN rm -rf packages/front-end/.next/cache \
   && find /usr/local/src/app -name "*.map" -delete \
-  && find /usr/local/src/app -name "*.tsbuildinfo" -delete
+  && find /usr/local/src/app -name "*.tsbuildinfo" -delete && \
+  echo "=== NODEBUILD: Final cleanup ===" && \
+  df -h / && \
+  du -sh /usr/local/src/app 2>/dev/null || echo "Final app dir size"
 
 
 # Package the full app together
@@ -110,8 +132,12 @@ RUN apt-get update && \
   apt-get clean && \
   rm -rf /var/lib/apt/lists/*
 COPY --from=pybuild /usr/local/src/app/requirements.txt /usr/local/src/requirements.txt
-RUN pip3 install --no-cache-dir -r /usr/local/src/requirements.txt && \
-  rm -rf /root/.cache /root/.pip /tmp/* /var/tmp/*
+RUN echo "=== FINAL: Before pip install ===" && \
+  df -h / && \
+  pip3 install --no-cache-dir -r /usr/local/src/requirements.txt && \
+  rm -rf /root/.cache /root/.pip /tmp/* /var/tmp/* && \
+  echo "=== FINAL: After pip install ===" && \
+  df -h /
 # Copy built packages, production node_modules, and package files
 # Production deps are already installed in nodebuild stage to avoid disk space issues
 COPY --from=nodebuild /usr/local/src/app/packages ./packages
@@ -119,13 +145,23 @@ COPY --from=nodebuild /usr/local/src/app/node_modules ./node_modules
 COPY --from=nodebuild /usr/local/src/app/package.json ./package.json
 COPY --from=nodebuild /usr/local/src/app/yarn.lock ./yarn.lock
 COPY --from=nodebuild /usr/local/src/app/patches ./patches
+RUN echo "=== FINAL: After copying node_modules and packages ===" && \
+  df -h / && \
+  du -sh /usr/local/src/app/node_modules 2>/dev/null || echo "node_modules size" && \
+  du -sh /usr/local/src/app/packages 2>/dev/null || echo "packages size"
 
 # wildcard used to act as 'copy if exists'
 COPY buildinfo* ./buildinfo
 
 COPY --from=pybuild /usr/local/src/app/dist /usr/local/src/gbstats
-RUN pip3 install --no-cache-dir /usr/local/src/gbstats/*.whl ddtrace && \
-  rm -rf /root/.cache /root/.pip /tmp/* /var/tmp/*
+RUN echo "=== FINAL: Before gbstats install ===" && \
+  df -h / && \
+  pip3 install --no-cache-dir /usr/local/src/gbstats/*.whl ddtrace && \
+  rm -rf /root/.cache /root/.pip /tmp/* /var/tmp/* && \
+  echo "=== FINAL: After gbstats install ===" && \
+  df -h / && \
+  echo "=== FINAL: Total app size ===" && \
+  du -sh /usr/local/src/app 2>/dev/null || echo "Final app size"
 ARG DD_GIT_COMMIT_SHA=""
 ARG DD_GIT_REPOSITORY_URL=https://github.com/growthbook/growthbook.git
 ARG DD_VERSION=""
